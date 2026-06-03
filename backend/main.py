@@ -77,8 +77,8 @@ def _default_config(name: str = "ollama") -> ProviderConfig:
         name="lmstudio",
         chat_model="google/gemma-4-e4b",
         embedding_model="text-embedding-nomic-embed-text-v1.5",
-        base_url="http://20.0.0.136:1234",
-        api_key="",
+        base_url=config.OPENAI_BASE_URL,
+        api_key=config.OPENAI_API_KEY,
     )
 
 
