@@ -36,7 +36,7 @@ cd frontend && npm install && npm run dev
 |-----------|----------|-------------------|
 | Ollama | `http://localhost:11434` | `OLLAMA_BASE_URL` |
 | OpenAI (LMStudio) | `http://localhost:1234/v1` | `OPENAI_BASE_URL`, `OPENAI_API_KEY` |
-| LMStudio (нативный) | `http://20.0.0.136:1234` | хардкод в `main.py` |
+| LMStudio (нативный) | `http://localhost:1234` | `OPENAI_BASE_URL`, `OPENAI_API_KEY` |
 
 ## Возможности
 
