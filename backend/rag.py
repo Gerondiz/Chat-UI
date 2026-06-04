@@ -39,8 +39,12 @@ async def list_collections():
         collections = await asyncio.to_thread(client.list_collections)
         result = []
         for c in collections:
-            count = await asyncio.to_thread(c.count)
-            result.append({"name": c.name, "count": count})
+            all_items = await asyncio.to_thread(c.get, limit=10000)
+            files = set()
+            for m in (all_items.get("metadatas") or []):
+                if m and m.get("filename"):
+                    files.add(m["filename"])
+            result.append({"name": c.name, "count": len(files)})
         return result
     except ChromaError:
         return []

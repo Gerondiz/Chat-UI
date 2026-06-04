@@ -178,10 +178,8 @@ async def chat(req: ChatRequest):
 
         messages = _build_messages(req)
         if context:
-            messages.append({"role": "user", "content": context})
-            messages.append({"role": "user", "content": req.messages[-1].content if req.messages else ""})
-            # replace last user message
-            messages = messages[:-2] + [messages[-1]]
+            last_q = req.messages[-1].content if req.messages else ""
+            messages.append({"role": "user", "content": context + "\n\nВопрос: " + last_q})
 
         resp = await current_provider.chat(
             messages,
@@ -226,9 +224,8 @@ async def chat_stream(req: ChatRequest):
                 + "\n---\n".join(d["content"] for d in docs)
                 + "\n---\nОтветь на вопрос на основе контекста выше."
             )
-            messages.append({"role": "user", "content": context})
-            messages.append({"role": "user", "content": req.messages[-1].content if req.messages else ""})
-            messages = messages[:-2] + [messages[-1]]
+            last_q = req.messages[-1].content if req.messages else ""
+            messages.append({"role": "user", "content": context + "\n\nВопрос: " + last_q})
 
         async def generate():
             full = ""
