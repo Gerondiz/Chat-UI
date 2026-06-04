@@ -4,7 +4,8 @@ import remarkGfm from 'remark-gfm'
 import SettingsPanel from '../components/SettingsPanel'
 import * as api from '../api'
 
-const clean = (text) => text.replace(/>/g, '')
+const cleanThinking = (text) => text.replace(/>/g, '')
+const stripHtml = (text) => text.replace(/<[^>]+>/g, '')
 
 const DEFAULT_SETTINGS = {
   systemPrompt: '',
@@ -318,12 +319,12 @@ export default function ChatPage({ sidebarOpen, setSidebarOpen }) {
                 <details className="thinking-block">
                   <summary>🤔 Размышления модели</summary>
                   <div className="thinking-content">
-                    {clean(msg.thinking.replace(/<\/?think>/g, ''))}
+                    {cleanThinking(msg.thinking.replace(/<\/?think>/g, ''))}
                   </div>
                 </details>
               )}
               <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                {msg.content}
+                {stripHtml(msg.content)}
               </ReactMarkdown>
               {msg.metrics && (
                 <div className="metrics-bar">
@@ -353,13 +354,13 @@ export default function ChatPage({ sidebarOpen, setSidebarOpen }) {
                 <details className="thinking-block">
                   <summary>🤔 Размышления модели</summary>
                   <div className="thinking-content">
-                    {clean(streamThinking)}
+                    {cleanThinking(streamThinking)}
                   </div>
                 </details>
               )}
               {streamText ? (
                 <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                  {streamText}
+                  {stripHtml(streamText)}
                 </ReactMarkdown>
               ) : (
                 <div className="typing">
