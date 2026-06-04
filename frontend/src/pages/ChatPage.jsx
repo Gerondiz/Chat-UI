@@ -313,12 +313,10 @@ export default function ChatPage({ sidebarOpen, setSidebarOpen }) {
           <div key={i} className={`message ${msg.role}`}>
             <div className="msg-bubble">
               {msg.thinking && showThinking && (
-                <details className="thinking-block" open>
+                <details className="thinking-block">
                   <summary>🤔 Размышления модели</summary>
                   <div className="thinking-content">
-                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                      {msg.thinking.replace(/<\/?think>/g, '')}
-                    </ReactMarkdown>
+                    {msg.thinking.replace(/<\/?think>/g, '')}
                   </div>
                 </details>
               )}
@@ -350,12 +348,10 @@ export default function ChatPage({ sidebarOpen, setSidebarOpen }) {
           <div className="message assistant">
             <div className="msg-bubble">
               {streamThinking && showThinking && (
-                <details className="thinking-block" open>
+                <details className="thinking-block">
                   <summary>🤔 Размышления модели</summary>
                   <div className="thinking-content">
-                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                      {streamThinking}
-                    </ReactMarkdown>
+                    {streamThinking}
                   </div>
                 </details>
               )}

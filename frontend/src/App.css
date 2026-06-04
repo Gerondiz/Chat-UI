@@ -726,6 +726,7 @@ html, body, #root {
   max-height: 300px;
   overflow-y: auto;
   font-style: italic;
+  white-space: pre-wrap;
 }
 
 .thinking-content p {
