@@ -3,25 +3,36 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import SettingsPanel from '../components/SettingsPanel'
 import * as api from '../api'
+import type {
+  Message,
+  ChatSettings,
+  Source,
+  Metrics,
+  Collection,
+} from '../types'
 
-const cleanThinking = (text) => text.replace(/>/g, '')
-const stripHtml = (text) => text.replace(/<[^>]+>/g, '')
+const cleanThinking = (text: string): string => text.replace(/>/g, '')
+const stripHtml = (text: string): string => text.replace(/<[^>]+>/g, '')
 
-const DEFAULT_SETTINGS = {
+const DEFAULT_SETTINGS: ChatSettings = {
   systemPrompt: '',
   temperature: 0.7,
   maxTokens: 4096,
   topP: 0.9,
 }
 
-const PROVIDERS = [
+const PROVIDERS: { id: string; label: string }[] = [
   { id: 'ollama', label: 'Ollama' },
-  // { id: 'openai', label: 'LMStudio (OpenAI)' },
   { id: 'lmstudio', label: 'LMStudio (Native)' },
 ]
 
-export default function ChatPage({ sidebarOpen, setSidebarOpen }) {
-  const [messages, setMessages] = useState([])
+interface ChatPageProps {
+  sidebarOpen: boolean
+  setSidebarOpen: (open: boolean) => void
+}
+
+export default function ChatPage({ sidebarOpen, setSidebarOpen }: ChatPageProps) {
+  const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
   const [streaming, setStreaming] = useState(false)
@@ -30,24 +41,24 @@ export default function ChatPage({ sidebarOpen, setSidebarOpen }) {
   const [showThinking, setShowThinking] = useState(true)
   const [error, setError] = useState('')
   const [mode, setMode] = useState('chat')
-  const [collections, setCollections] = useState([])
+  const [collections, setCollections] = useState<Collection[]>([])
   const [selectedCollection, setSelectedCollection] = useState('')
   const [showSettings, setShowSettings] = useState(false)
-  const [settings, setSettings] = useState(DEFAULT_SETTINGS)
-  const [sources, setSources] = useState([])
-  const [metrics, setMetrics] = useState(null)
+  const [settings, setSettings] = useState<ChatSettings>(DEFAULT_SETTINGS)
+  const [sources, setSources] = useState<Source[]>([])
+  const [metrics, setMetrics] = useState<Metrics | null>(null)
 
   const [providerName, setProviderName] = useState('ollama')
   const [providerOnline, setProviderOnline] = useState(false)
   const [chatModel, setChatModel] = useState('')
   const [embeddingModel, setEmbeddingModel] = useState('')
-  const [chatModels, setChatModels] = useState([])
-  const [embeddingModels, setEmbeddingModels] = useState([])
+  const [chatModels, setChatModels] = useState<string[]>([])
+  const [embeddingModels, setEmbeddingModels] = useState<string[]>([])
 
-  const msgEndRef = useRef(null)
-  const msgContainerRef = useRef(null)
-  const inputRef = useRef(null)
-  const abortRef = useRef(null)
+  const msgEndRef = useRef<HTMLDivElement>(null)
+  const msgContainerRef = useRef<HTMLDivElement>(null)
+  const inputRef = useRef<HTMLTextAreaElement>(null)
+  const abortRef = useRef<(() => void) | null>(null)
   const [userScrolledUp, setUserScrolledUp] = useState(false)
 
   const scrollToBottom = useCallback(() => {
@@ -87,10 +98,10 @@ export default function ChatPage({ sidebarOpen, setSidebarOpen }) {
       setProviderOnline(st.online)
       setChatModels(st.chat_models || [])
       setEmbeddingModels(st.embedding_models || [])
-    } catch (_) {}
+    } catch (_) { /* ignore */ }
   }
 
-  const handleSwitchProvider = async (name) => {
+  const handleSwitchProvider = async (name: string) => {
     try {
       setProviderOnline(false)
       setChatModels([])
@@ -103,12 +114,12 @@ export default function ChatPage({ sidebarOpen, setSidebarOpen }) {
       setProviderOnline(st.online)
       setChatModels(st.chat_models || [])
       setEmbeddingModels(st.embedding_models || [])
-    } catch (e) {
-      setError('Ошибка переключения провайдера: ' + e.message)
+    } catch (e: unknown) {
+      setError('Ошибка переключения провайдера: ' + (e instanceof Error ? e.message : String(e)))
     }
   }
 
-  const handleSelectModel = async (model) => {
+  const handleSelectModel = async (model: string) => {
     setChatModel(model)
     try {
       const cfg = await api.getProvider()
@@ -116,7 +127,7 @@ export default function ChatPage({ sidebarOpen, setSidebarOpen }) {
       await api.updateProviderConfig(cfg)
       const st = await api.getProviderStatus()
       setProviderOnline(st.online)
-    } catch (_) {}
+    } catch (_) { /* ignore */ }
   }
 
   const handleStop = () => {
@@ -135,7 +146,7 @@ export default function ChatPage({ sidebarOpen, setSidebarOpen }) {
     setError('')
     setMetrics(null)
 
-    const userMsg = { role: 'user', content: text }
+    const userMsg: Message = { role: 'user', content: text }
     const updated = [...messages, userMsg]
     setMessages(updated)
 
@@ -150,25 +161,22 @@ export default function ChatPage({ sidebarOpen, setSidebarOpen }) {
     abortRef.current = api.chatStream(
       updated,
       {
-        systemPrompt: settings.systemPrompt,
+        settings,
         mode,
         collection: selectedCollection,
-        temperature: settings.temperature,
-        maxTokens: settings.maxTokens,
-        topP: settings.topP,
         reasoning: showThinking,
       },
-      (token) => {
+      (token: string) => {
         setStreamText((prev) => prev + token)
       },
-      (thinking, isEnd) => {
+      (thinking: string, isEnd: boolean) => {
         if (isEnd) {
           setStreamThinking((prev) => prev)
         } else if (thinking) {
           setStreamThinking((prev) => prev + thinking)
         }
       },
-      (full, thinking, srcs, met) => {
+      (full: string, thinking: string, srcs: Source[], met: Metrics | null) => {
         setStreaming(false)
         setLoading(false)
         setStreamText('')
@@ -185,7 +193,7 @@ export default function ChatPage({ sidebarOpen, setSidebarOpen }) {
         setSources(srcs || [])
         setMetrics(met || null)
       },
-      (err) => {
+      (err: string) => {
         setStreaming(false)
         setLoading(false)
         setError(err)
@@ -193,7 +201,7 @@ export default function ChatPage({ sidebarOpen, setSidebarOpen }) {
     )
   }
 
-  const handleKeyDown = (e) => {
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       handleSend()
@@ -315,7 +323,7 @@ export default function ChatPage({ sidebarOpen, setSidebarOpen }) {
         {messages.map((msg, i) => (
           <div key={i} className={`message ${msg.role}`}>
             <div className="msg-bubble">
-              {msg.thinking && showThinking && (
+              {msg.role === 'assistant' && msg.thinking && showThinking && (
                 <details className="thinking-block">
                   <summary>🤔 Размышления модели</summary>
                   <div className="thinking-content">
@@ -326,15 +334,21 @@ export default function ChatPage({ sidebarOpen, setSidebarOpen }) {
               <ReactMarkdown remarkPlugins={[remarkGfm]}>
                 {stripHtml(msg.content)}
               </ReactMarkdown>
-              {msg.metrics && (
+              {msg.role === 'assistant' && msg.metrics && (
                 <div className="metrics-bar">
                   ⏱ {msg.metrics.time_sec}с · {msg.metrics.tokens} токенов
                   {msg.metrics.lm_tokens_per_sec ? (
                     <>
-                      {msg.metrics.input_tokens > 0 && <> · вход: {msg.metrics.input_tokens}</>}
-                      {msg.metrics.reasoning_tokens > 0 && <> · размышления: {msg.metrics.reasoning_tokens}</>}
+                      {msg.metrics.input_tokens && msg.metrics.input_tokens > 0 && (
+                        <> · вход: {msg.metrics.input_tokens}</>
+                      )}
+                      {msg.metrics.reasoning_tokens && msg.metrics.reasoning_tokens > 0 && (
+                        <> · размышления: {msg.metrics.reasoning_tokens}</>
+                      )}
                       · {Number(msg.metrics.lm_tokens_per_sec).toFixed(1)} ток/с
-                      {msg.metrics.ttft > 0 && <> · TTFT: {Number(msg.metrics.ttft).toFixed(2)}с</>}
+                      {msg.metrics.ttft && msg.metrics.ttft > 0 && (
+                        <> · TTFT: {Number(msg.metrics.ttft).toFixed(2)}с</>
+                      )}
                     </>
                   ) : (
                     msg.metrics.output_tokens > 0 && (

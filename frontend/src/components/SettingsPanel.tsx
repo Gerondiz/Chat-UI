@@ -1,7 +1,15 @@
 import React from 'react'
+import type { ChatSettings } from '../types'
 
-export default function SettingsPanel({ settings, onChange, onClose }) {
-  const set = (key, value) => onChange({ ...settings, [key]: value })
+interface SettingsPanelProps {
+  settings: ChatSettings
+  onChange: (settings: ChatSettings) => void
+  onClose: () => void
+}
+
+export default function SettingsPanel({ settings, onChange, onClose }: SettingsPanelProps) {
+  const set = (key: keyof ChatSettings, value: string | number) =>
+    onChange({ ...settings, [key]: value })
 
   return (
     <>

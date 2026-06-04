@@ -1,8 +1,13 @@
 import React from 'react'
 
-export default function Sidebar({
-  open, onToggle, page, onPageChange,
-}) {
+interface SidebarProps {
+  open: boolean
+  onToggle: () => void
+  page: string
+  onPageChange: (page: string) => void
+}
+
+export default function Sidebar({ open, onToggle, page, onPageChange }: SidebarProps) {
   return (
     <aside className={`sidebar ${open ? '' : 'closed'}`}>
       <div className="sidebar-header">

@@ -1,17 +1,35 @@
-// const API = '/api'  // через Vite proxy (нестабильно)
-const API = 'http://localhost:8000/api'  // напрямую к бэкенду
+import type {
+  ProviderConfig,
+  ProviderStatus,
+  Collection,
+  CollectionDoc,
+  Workspace,
+  ChatMessage,
+  ChatOptions,
+  ChatSettings,
+  Source,
+  SSEData,
+  Metrics,
+  TokenCallback,
+  ThinkingCallback,
+  DoneCallback,
+  ErrorCallback,
+  AbortFn,
+} from './types'
 
-export async function getProviders() {
+const API = 'http://localhost:8000/api'
+
+export async function getProviders(): Promise<{ providers: string[] }> {
   const r = await fetch(`${API}/providers`)
   return r.json()
 }
 
-export async function getProvider() {
+export async function getProvider(): Promise<ProviderConfig> {
   const r = await fetch(`${API}/provider`)
   return r.json()
 }
 
-export async function switchProvider(name) {
+export async function switchProvider(name: string): Promise<ProviderConfig> {
   const r = await fetch(`${API}/provider`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
@@ -20,7 +38,7 @@ export async function switchProvider(name) {
   return r.json()
 }
 
-export async function updateProviderConfig(cfg) {
+export async function updateProviderConfig(cfg: Partial<ProviderConfig>): Promise<ProviderConfig> {
   const r = await fetch(`${API}/provider/config`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
@@ -29,23 +47,27 @@ export async function updateProviderConfig(cfg) {
   return r.json()
 }
 
-export async function getProviderStatus() {
+export async function getProviderStatus(): Promise<ProviderStatus> {
   const r = await fetch(`${API}/provider/status`)
   return r.json()
 }
 
-export async function getProviderModels() {
+export async function getProviderModels(): Promise<{ chat_models: string[]; embedding_models: string[] }> {
   const r = await fetch(`${API}/provider/models`)
   return r.json()
 }
 
-export async function chat(messages, opts = {}) {
+export async function chat(
+  messages: ChatMessage[],
+  opts: Partial<ChatOptions> = {},
+  settings?: Partial<ChatSettings>,
+): Promise<{ role: string; content: string; thinking?: string; sources?: Source[] }> {
   const r = await fetch(`${API}/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       messages,
-      system_prompt: opts.systemPrompt || '',
+      system_prompt: settings?.systemPrompt || opts.systemPrompt || '',
       mode: opts.mode || 'chat',
       collection: opts.collection || '',
       temperature: opts.temperature ?? 0.7,
@@ -59,23 +81,32 @@ export async function chat(messages, opts = {}) {
   return r.json()
 }
 
-export function chatStream(messages, opts = {}, onToken, onThinking, onDone, onError) {
+export function chatStream(
+  messages: ChatMessage[],
+  opts: Partial<ChatOptions> & { settings?: Partial<ChatSettings> },
+  onToken?: TokenCallback,
+  onThinking?: ThinkingCallback,
+  onDone?: DoneCallback,
+  onError?: ErrorCallback,
+): AbortFn {
   const controller = new AbortController()
+
+  const body = {
+    messages,
+    system_prompt: opts.settings?.systemPrompt || opts.systemPrompt || '',
+    mode: opts.mode || 'chat',
+    collection: opts.collection || '',
+    temperature: opts.temperature ?? 0.7,
+    max_tokens: opts.maxTokens ?? 4096,
+    top_p: opts.topP ?? 0.9,
+    reasoning: opts.reasoning ?? true,
+    stream: true,
+  }
 
   fetch(`${API}/chat/stream`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      messages,
-      system_prompt: opts.systemPrompt || '',
-      mode: opts.mode || 'chat',
-      collection: opts.collection || '',
-      temperature: opts.temperature ?? 0.7,
-      max_tokens: opts.maxTokens ?? 4096,
-      top_p: opts.topP ?? 0.9,
-      reasoning: opts.reasoning ?? true,
-      stream: true,
-    }),
+    body: JSON.stringify(body),
     signal: controller.signal,
   }).then(async (r) => {
     if (!r.ok) {
@@ -83,27 +114,12 @@ export function chatStream(messages, opts = {}, onToken, onThinking, onDone, onE
       onError?.(err.detail)
       return
     }
-    const reader = r.body.getReader()
+    const reader = r.body!.getReader()
     const decoder = new TextDecoder()
     let buffer = ''
     let raw = ''
     let inThink = false
     let isFirstContent = true
-
-    const flushThinking = () => {
-      const parts = raw.split(/(<think[\s\S]*?<\/think>)/)
-      for (const part of parts) {
-        if (!part) continue
-        if (part.startsWith('<think')) {
-          const content = part.replace(/<\/?think[^>]*>/g, '')
-          inThink = true
-          onThinking?.(content, false)
-        } else if (inThink) {
-          inThink = false
-          // flush remaining thinking
-        }
-      }
-    }
 
     while (true) {
       const { done, value } = await reader.read()
@@ -114,7 +130,7 @@ export function chatStream(messages, opts = {}, onToken, onThinking, onDone, onE
       for (const line of lines) {
         if (line.startsWith('data: ')) {
           try {
-            const data = JSON.parse(line.slice(6))
+            const data: SSEData = JSON.parse(line.slice(6))
             if (data.done) {
               onDone?.(data.full || '', data.thinking || '', data.sources || [], data.metrics || null)
             } else {
@@ -122,7 +138,6 @@ export function chatStream(messages, opts = {}, onToken, onThinking, onDone, onE
               if (!token) continue
               raw += token
 
-              // parse think tags in-place
               let remaining = token
               while (remaining.length > 0) {
                 if (inThink) {
@@ -145,17 +160,16 @@ export function chatStream(messages, opts = {}, onToken, onThinking, onDone, onE
                     if (before) onToken?.(before)
                     remaining = remaining.slice(startIdx)
                     inThink = true
-                    // check if </think> is also in this chunk
                     const endIdx = remaining.indexOf('</think>')
                     if (endIdx >= 0) {
-                      const thinkText = remaining.slice(6, endIdx) // skip <think
+                      const thinkText = remaining.slice(6, endIdx)
                       if (thinkText) onThinking?.(thinkText, false)
                       onThinking?.('', true)
                       remaining = remaining.slice(endIdx + 8)
                       inThink = false
                       isFirstContent = true
                     } else {
-                      const thinkText = remaining.slice(6) // skip <think
+                      const thinkText = remaining.slice(6)
                       if (thinkText) onThinking?.(thinkText, false)
                       remaining = ''
                     }
@@ -166,23 +180,23 @@ export function chatStream(messages, opts = {}, onToken, onThinking, onDone, onE
                 }
               }
             }
-          } catch (_) {}
+          } catch (_) { /* ignore parse errors */ }
         }
       }
     }
-  }).catch((err) => {
+  }).catch((err: Error) => {
     if (err.name !== 'AbortError') onError?.(err.message)
   })
 
   return () => controller.abort()
 }
 
-export async function getCollections() {
+export async function getCollections(): Promise<{ collections: Collection[]; error?: string }> {
   const r = await fetch(`${API}/collections`)
   return r.json()
 }
 
-export async function createCollection(name) {
+export async function createCollection(name: string): Promise<{ status: string; name: string }> {
   const r = await fetch(`${API}/collections?name=${encodeURIComponent(name)}`, {
     method: 'POST',
   })
@@ -190,7 +204,7 @@ export async function createCollection(name) {
   return r.json()
 }
 
-export async function deleteCollection(name) {
+export async function deleteCollection(name: string): Promise<{ status: string; name: string }> {
   const r = await fetch(`${API}/collections/${encodeURIComponent(name)}`, {
     method: 'DELETE',
   })
@@ -198,12 +212,12 @@ export async function deleteCollection(name) {
   return r.json()
 }
 
-export async function getCollectionDocuments(name) {
+export async function getCollectionDocuments(name: string): Promise<{ documents: CollectionDoc[]; error?: string }> {
   const r = await fetch(`${API}/collections/${encodeURIComponent(name)}/documents`)
   return r.json()
 }
 
-export async function uploadDocument(name, file) {
+export async function uploadDocument(name: string, file: File): Promise<{ status: string; chunks?: number }> {
   const form = new FormData()
   form.append('file', file)
   const r = await fetch(`${API}/collections/${encodeURIComponent(name)}/documents`, {
@@ -214,12 +228,12 @@ export async function uploadDocument(name, file) {
   return r.json()
 }
 
-export async function getWorkspaces() {
+export async function getWorkspaces(): Promise<{ workspaces: Workspace[] }> {
   const r = await fetch(`${API}/workspaces`)
   return r.json()
 }
 
-export async function createWorkspace(data) {
+export async function createWorkspace(data: Partial<Workspace>): Promise<Workspace> {
   const r = await fetch(`${API}/workspaces`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -228,7 +242,7 @@ export async function createWorkspace(data) {
   return r.json()
 }
 
-export async function updateWorkspace(id, data) {
+export async function updateWorkspace(id: number, data: Partial<Workspace>): Promise<Workspace> {
   const r = await fetch(`${API}/workspaces/${id}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
@@ -237,7 +251,7 @@ export async function updateWorkspace(id, data) {
   return r.json()
 }
 
-export async function deleteWorkspace(id) {
+export async function deleteWorkspace(id: number): Promise<{ status: string }> {
   const r = await fetch(`${API}/workspaces/${id}`, {
     method: 'DELETE',
   })

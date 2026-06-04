@@ -1,18 +1,19 @@
 import React, { useState, useEffect } from 'react'
 import * as api from '../api'
+import type { Collection } from '../types'
 
 export default function CollectionsPage() {
-  const [collections, setCollections] = useState([])
+  const [collections, setCollections] = useState<Collection[]>([])
   const [newName, setNewName] = useState('')
   const [error, setError] = useState('')
-  const [uploading, setUploading] = useState(null)
+  const [uploading, setUploading] = useState<string | null>(null)
 
   const load = async () => {
     try {
       const data = await api.getCollections()
       setCollections(data.collections || [])
-    } catch (e) {
-      setError(e.message)
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : String(e))
     }
   }
 
@@ -27,29 +28,29 @@ export default function CollectionsPage() {
       await api.createCollection(name)
       setNewName('')
       load()
-    } catch (e) {
-      setError(e.message)
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : String(e))
     }
   }
 
-  const handleDelete = async (name) => {
+  const handleDelete = async (name: string) => {
     if (!confirm(`Удалить коллекцию "${name}"?`)) return
     try {
       await api.deleteCollection(name)
       load()
-    } catch (e) {
-      setError(e.message)
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : String(e))
     }
   }
 
-  const handleUpload = async (collectionName, file) => {
+  const handleUpload = async (collectionName: string, file: File) => {
     setUploading(collectionName)
     setError('')
     try {
       await api.uploadDocument(collectionName, file)
       load()
-    } catch (e) {
-      setError(e.message)
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : String(e))
     } finally {
       setUploading(null)
     }
@@ -69,7 +70,7 @@ export default function CollectionsPage() {
         <input
           value={newName}
           onChange={(e) => setNewName(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && handleCreate()}
+          onKeyDown={(e: React.KeyboardEvent<HTMLInputElement>) => e.key === 'Enter' && handleCreate()}
           placeholder="Название новой коллекции..."
         />
         <button className="btn btn-primary" onClick={handleCreate}>
@@ -92,8 +93,8 @@ export default function CollectionsPage() {
               <input
                 type="file"
                 accept=".pdf,.txt,.docx"
-                onChange={(e) => {
-                  if (e.target.files[0]) handleUpload(col.name, e.target.files[0])
+                onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
+                  if (e.target.files?.[0]) handleUpload(col.name, e.target.files[0])
                   e.target.value = ''
                 }}
                 disabled={uploading === col.name}
