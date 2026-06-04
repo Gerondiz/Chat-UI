@@ -36,7 +36,6 @@ React + Vite (JS) ──HTTP──> FastAPI ──HTTP──> Ollama / OpenAI / 
 ### Прочее
 - CORS (все origins)
 - Загрузка `.env` из `backend/.env`
-- LMStudio provider обрезает `/v1` из base_url для корректного пути `/api/v1/...`
 - stream парсит `<think>` теги и LMSTATS от LMStudio
 
 ## Frontend — реализовано
