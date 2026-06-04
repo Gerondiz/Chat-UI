@@ -110,8 +110,12 @@ class LMStudioProvider(BaseProvider):
         try:
             resp = await self._client.get(f"{self.base_url}/api/v1/models")
             resp.raise_for_status()
-            for m in resp.json().get("data", []):
-                name = m["id"]
+            data = resp.json()
+            models = data.get("models") or data.get("data", [])
+            for m in models:
+                name = m.get("id") or m.get("key", "")
+                if not name:
+                    continue
                 chat_models.append(name)
                 if "embed" in name.lower():
                     embedding_models.append(name)
@@ -126,6 +130,9 @@ class LMStudioProvider(BaseProvider):
         try:
             resp = await self._client.get(f"{self.base_url}/api/v1/models")
             ok = resp.status_code == 200
+            if ok:
+                data = resp.json()
+                ok = "error" not in data
             await resp.aclose()
             return ok
         except Exception:
