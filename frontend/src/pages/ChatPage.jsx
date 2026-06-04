@@ -4,6 +4,8 @@ import remarkGfm from 'remark-gfm'
 import SettingsPanel from '../components/SettingsPanel'
 import * as api from '../api'
 
+const clean = (text) => text.replace(/>/g, '')
+
 const DEFAULT_SETTINGS = {
   systemPrompt: '',
   temperature: 0.7,
@@ -316,7 +318,7 @@ export default function ChatPage({ sidebarOpen, setSidebarOpen }) {
                 <details className="thinking-block">
                   <summary>🤔 Размышления модели</summary>
                   <div className="thinking-content">
-                    {msg.thinking.replace(/<\/?think>/g, '')}
+                    {clean(msg.thinking.replace(/<\/?think>/g, ''))}
                   </div>
                 </details>
               )}
@@ -351,7 +353,7 @@ export default function ChatPage({ sidebarOpen, setSidebarOpen }) {
                 <details className="thinking-block">
                   <summary>🤔 Размышления модели</summary>
                   <div className="thinking-content">
-                    {streamThinking}
+                    {clean(streamThinking)}
                   </div>
                 </details>
               )}
