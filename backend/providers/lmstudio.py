@@ -5,7 +5,10 @@ from .base import BaseProvider
 
 class LMStudioProvider(BaseProvider):
     def __init__(self, base_url: str, chat_model: str, embedding_model: str, api_key: str = ""):
-        self.base_url = base_url.rstrip("/")
+        base = base_url.rstrip("/")
+        if base.endswith("/v1"):
+            base = base[:-3]
+        self.base_url = base
         self.chat_model = chat_model
         self.embedding_model = embedding_model
         headers = {"Content-Type": "application/json"}
