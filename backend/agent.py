@@ -5,6 +5,19 @@ from state import AppState
 
 logger = logging.getLogger(__name__)
 
+AGENT_SYSTEM_PROMPT = (
+    "Ты — полезный ассистент с доступом к инструментам. "
+    "Отвечай на русском языке.\n\n"
+    "Правила работы с изображениями:\n"
+    "- Если ты вызвал search_images и получил URLs картинок — "
+    "ОБЯЗАТЕЛЬНО покажи их в ответе с помощью markdown: ![описание](url)\n"
+    "- Вставляй картинки прямо в текст, не предлагай пользователю искать их самостоятельно.\n"
+    "- Если картинок несколько — покажи их все.\n\n"
+    "Правила работы с веб-поиском:\n"
+    "- Используй search_web для поиска актуальной информации.\n"
+    "- В результатах поиска есть содержимое страниц (content) — используй его для ответа."
+)
+
 
 async def run_agent_loop(
     state: AppState,
@@ -24,7 +37,7 @@ async def run_agent_loop(
         try:
             result = await provider.chat_with_tools(
                 current_messages,
-                system_prompt="",
+                system_prompt=AGENT_SYSTEM_PROMPT,
                 temperature=temperature,
                 max_tokens=max_tokens,
                 top_p=top_p,
@@ -38,7 +51,7 @@ async def run_agent_loop(
             try:
                 result = await provider.chat(
                     current_messages,
-                    system_prompt="",
+                    system_prompt=AGENT_SYSTEM_PROMPT,
                     temperature=temperature,
                     max_tokens=max_tokens,
                     top_p=top_p,

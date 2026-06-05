@@ -104,8 +104,10 @@ async def handle_list_tools() -> list[types.Tool]:
             name="search_images",
             description=(
                 "Search the internet for images. "
-                "Returns image URLs that can be displayed directly in the chat "
-                "using markdown: ![alt](image_url)."
+                "Returns image URLs that you MUST display directly in the chat "
+                "using markdown image syntax: ![description](image_url). "
+                "DO NOT just list URLs or tell the user to search manually — "
+                "show the images inline in your response."
             ),
             inputSchema={
                 "type": "object",
