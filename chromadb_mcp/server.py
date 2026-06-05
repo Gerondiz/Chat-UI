@@ -50,7 +50,6 @@ async def handle_list_tools() -> list[types.Tool]:
                     "n_results": {
                         "type": "integer",
                         "description": "Number of results to return (default 5)",
-                        "default": 5,
                     },
                 },
                 "required": ["collection_name", "query"],

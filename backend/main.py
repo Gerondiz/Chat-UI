@@ -197,15 +197,27 @@ async def _run_agent_loop(
     tool_schemas = mcp_host.get_tool_schemas()
 
     for iteration in range(max_iterations):
-        result = await current_provider.chat_with_tools(
-            current_messages,
-            system_prompt="",
-            temperature=temperature,
-            max_tokens=max_tokens,
-            top_p=top_p,
-            reasoning=reasoning,
-            tools=tool_schemas,
-        )
+        try:
+            result = await current_provider.chat_with_tools(
+                current_messages,
+                system_prompt="",
+                temperature=temperature,
+                max_tokens=max_tokens,
+                top_p=top_p,
+                reasoning=reasoning,
+                tools=tool_schemas,
+            )
+        except Exception as exc:
+            logger.warning("chat_with_tools failed (%s), falling back to direct chat", exc)
+            content = await current_provider.chat(
+                current_messages,
+                system_prompt="",
+                temperature=temperature,
+                max_tokens=max_tokens,
+                top_p=top_p,
+                reasoning=reasoning,
+            )
+            return content, all_sources
 
         # Append assistant response to conversation
         assistant_msg: dict = {"role": "assistant", "content": result.content}
