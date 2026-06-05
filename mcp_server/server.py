@@ -7,6 +7,7 @@ import mcp.types as types
 from mcp.server import NotificationOptions, Server
 from mcp.server.stdio import stdio_server
 
+from datetime import datetime
 from db_manager import ChromaManager
 from web_search import search_web
 
@@ -87,6 +88,18 @@ async def handle_list_tools() -> list[types.Tool]:
                 "required": ["query"],
             },
         ),
+        types.Tool(
+            name="get_current_time",
+            description=(
+                "Get the current date and time. "
+                "Use this when you need to know today's date, current time, "
+                "day of the week, or any time-related information."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {},
+            },
+        ),
     ]
 
 
@@ -153,6 +166,17 @@ async def handle_call_tool(
             lines.append(f"   URL: {r['url']}")
             lines.append(f"   {r['snippet']}")
         return [types.TextContent(type="text", text="\n".join(lines))]
+
+    elif name == "get_current_time":
+        now = datetime.now()
+        return [types.TextContent(
+            type="text",
+            text=(
+                f"Current date and time: {now.strftime('%Y-%m-%d %H:%M:%S')}\n"
+                f"Day of week: {now.strftime('%A')}\n"
+                f"Timezone: UTC{now.strftime('%z') or '+0000'}"
+            ),
+        )]
 
     else:
         raise ValueError(f"Unknown tool: {name}")
