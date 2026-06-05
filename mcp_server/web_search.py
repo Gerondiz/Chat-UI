@@ -48,7 +48,6 @@ def _extract_text(html: str) -> str:
     except Exception:
         pass
     text = extractor.text
-    # Normalize whitespace: collapse multiple newlines/spaces
     text = re.sub(r"\n{3,}", "\n\n", text)
     text = re.sub(r" {2,}", " ", text)
     return text.strip()
@@ -60,7 +59,6 @@ def _should_fetch(url: str) -> bool:
     if scheme not in ("http", "https"):
         return False
     host = parsed.hostname or ""
-    # Skip known non-textual domains
     skip_domains = {"youtube.com", "youtu.be", "instagram.com", "facebook.com", "twitter.com", "x.com", "tiktok.com"}
     for sd in skip_domains:
         if host.endswith(sd):
@@ -68,42 +66,50 @@ def _should_fetch(url: str) -> bool:
     return True
 
 
-async def _fetch_page(url: str) -> str:
+async def _fetch_page(client: httpx.AsyncClient, url: str) -> str:
     try:
-        async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT, follow_redirects=True) as client:
-            resp = await client.get(url, headers={"User-Agent": "Mozilla/5.0"})
-            resp.raise_for_status()
-            content_type = resp.headers.get("content-type", "")
-            if "text/html" not in content_type and "text/plain" not in content_type:
-                return ""
-            html = resp.text
-            text = _extract_text(html)
-            if len(text) > _MAX_CONTENT_LENGTH:
-                text = text[:_MAX_CONTENT_LENGTH] + "\n\n[...truncated]"
-            return text
+        resp = await client.get(url, headers={"User-Agent": "Mozilla/5.0"})
+        resp.raise_for_status()
+        content_type = resp.headers.get("content-type", "")
+        if "text/html" not in content_type and "text/plain" not in content_type:
+            return ""
+        html = resp.text
+        text = _extract_text(html)
+        if len(text) > _MAX_CONTENT_LENGTH:
+            text = text[:_MAX_CONTENT_LENGTH] + "\n\n[...truncated]"
+        return text
     except Exception as exc:
         logger.debug("Failed to fetch %s: %s", url, exc)
         return ""
 
 
-def search_web(query: str, max_results: int = 5) -> list[dict[str, str]]:
+async def search_web(query: str, max_results: int = 5) -> list[dict[str, str]]:
     """Search the web using DuckDuckGo and fetch page content."""
     with DDGS() as ddgs:
         raw = list(ddgs.text(query, max_results=max_results))
 
+    urls: list[str] = []
+    for r in raw:
+        url = r.get("href", "")
+        if _should_fetch(url):
+            urls.append(url)
+
+    async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT, follow_redirects=True) as client:
+        contents = await asyncio.gather(*(_fetch_page(client, u) for u in urls), return_exceptions=False)
+
+    content_by_url = dict(zip(urls, contents))
+
     results: list[dict[str, str]] = []
     for r in raw:
         url = r.get("href", "")
-        snippet = r.get("body", "")
         item: dict[str, str] = {
             "title": r.get("title", ""),
             "url": url,
-            "snippet": snippet,
+            "snippet": r.get("body", ""),
         }
-        if _should_fetch(url):
-            content = asyncio.run(_fetch_page(url))
-            if content:
-                item["content"] = content
+        content = content_by_url.get(url) or ""
+        if content:
+            item["content"] = content
         results.append(item)
 
     return results

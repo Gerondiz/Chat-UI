@@ -157,7 +157,7 @@ async def handle_call_tool(
             raise ValueError("query is required")
         query = arguments["query"]
         max_results = arguments.get("max_results", 5)
-        results = search_web(query, max_results)
+        results = await search_web(query, max_results)
         if not results:
             return [types.TextContent(type="text", text=f"No search results found for '{query}'.")]
         lines = [f"Web search results for '{query}':"]
