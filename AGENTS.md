@@ -35,7 +35,7 @@ Playwright tests use Chromium, not headless. No lint, typecheck, or build comman
 
 ## Key config
 
-Backend loads `.env` from `backend/.env` (not repo root). ChromaDB defaults: host `localhost`, port **8001** (`config.py`) — but `.env` sets port **8000**. The `.env` has actual infra addresses (e.g., `OPENAI_BASE_URL=http://20.0.0.136:1234/v1`).
+Backend loads `.env` from `backend/.env` (not repo root). ChromaDB port: **8001** (`config.py`). `.env` has actual infra addresses (e.g., `OPENAI_BASE_URL=http://20.0.0.136:1234/v1`).
 
 Providers: `ollama` / `openai` / `lmstudio`. Base class at `backend/providers/base.py`.
 
@@ -44,5 +44,6 @@ Providers: `ollama` / `openai` / `lmstudio`. Base class at `backend/providers/ba
 - Chat messages with `<think... response` tags get thinking/content split server-side (both `/api/chat` and `/api/chat/stream`)
 - RAG mode appends context documents into messages before sending to provider
 - SSE streaming sends `data: {token, done}` lines; final message includes `full`, `thinking`, `sources`, `metrics`
-- Workspace CRUD is in-memory only (no SQLite yet)
+- Workspace CRUD via SQLite (`workspace_db.py`), not in-memory
 - Default system prompt is Russian: `"Ты — полезный ассистент. Отвечай на русском языке."`
+- `search_web` tool fetches actual page content via httpx + stdlib HTMLParser, not just snippets. Returns up to 8KB of text per page, skips script/style tags, excludes known non-textual domains (YouTube, Instagram, etc.)

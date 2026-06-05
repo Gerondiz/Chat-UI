@@ -164,7 +164,9 @@ async def handle_call_tool(
         for i, r in enumerate(results, 1):
             lines.append(f"\n{i}. {r['title']}")
             lines.append(f"   URL: {r['url']}")
-            lines.append(f"   {r['snippet']}")
+            lines.append(f"   Snippet: {r['snippet']}")
+            if r.get("content"):
+                lines.append(f"   Content:\n{r['content']}")
         return [types.TextContent(type="text", text="\n".join(lines))]
 
     elif name == "get_current_time":
