@@ -128,6 +128,8 @@ def get_messages(chat_id: int) -> list[dict]:
 
 def save_messages(chat_id: int, messages: list[dict]) -> list[dict]:
     conn = _get_conn()
+    # Delete existing messages to prevent duplicates on re-save
+    conn.execute("DELETE FROM chat_messages WHERE chat_id = ?", (chat_id,))
     for msg in messages:
         metrics = json.dumps(msg.get("metrics") or {}, ensure_ascii=False)
         sources = json.dumps(msg.get("sources") or [], ensure_ascii=False)
