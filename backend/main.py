@@ -664,8 +664,12 @@ async def chat_stream(req: ChatRequest):
                 if lm_output:
                     metrics["tokens"] = lm_output
                 metrics["reasoning_tokens"] = lm_stats.get("reasoning_output_tokens", 0)
-                metrics["lm_tokens_per_sec"] = round(lm_stats.get("tokens_per_second", 0), 1)
-                metrics["ttft"] = round(lm_stats.get("time_to_first_token_seconds", 0), 2)
+                tps = lm_stats.get("tokens_per_second")
+                if tps:
+                    metrics["lm_tokens_per_sec"] = round(tps, 1)
+                ttft = lm_stats.get("time_to_first_token_seconds")
+                if ttft:
+                    metrics["ttft"] = round(ttft, 2)
 
             done_data = {
                 "token": "",
