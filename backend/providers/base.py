@@ -1,4 +1,19 @@
 from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
+from typing import Any
+
+
+@dataclass
+class ToolCall:
+    id: str = ""
+    name: str = ""
+    arguments: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class ChatResult:
+    content: str
+    tool_calls: list[ToolCall] | None = None
 
 
 class BaseProvider(ABC):
@@ -9,6 +24,26 @@ class BaseProvider(ABC):
         reasoning: bool = True,
     ) -> str:
         ...
+
+    async def chat_with_tools(
+        self, messages: list[dict], system_prompt: str = "",
+        temperature: float = 0.7, max_tokens: int = 4096, top_p: float = 0.9,
+        reasoning: bool = True,
+        tools: list[dict] | None = None,
+    ) -> ChatResult:
+        content = await self.chat(
+            messages, system_prompt, temperature, max_tokens, top_p, reasoning,
+        )
+        return ChatResult(content=content)
+
+    def format_tool_messages(
+        self, tool_calls: list[ToolCall], results: list[str]
+    ) -> list[dict]:
+        """Build tool result messages in provider-specific format."""
+        return [
+            {"role": "tool", "content": results[i]}
+            for i in range(len(tool_calls))
+        ]
 
     @abstractmethod
     async def chat_stream(

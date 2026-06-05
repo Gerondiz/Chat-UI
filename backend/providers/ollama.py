@@ -1,6 +1,6 @@
 import json
 import httpx
-from .base import BaseProvider
+from .base import BaseProvider, ChatResult, ToolCall
 
 
 class OllamaProvider(BaseProvider):
@@ -37,6 +37,48 @@ class OllamaProvider(BaseProvider):
             body["system"] = system_prompt
         data = await self._post("/api/chat", body)
         return data.get("message", {}).get("content", "")
+
+    async def chat_with_tools(
+        self, messages, system_prompt="",
+        temperature=0.7, max_tokens=4096, top_p=0.9,
+        reasoning=True, tools=None,
+    ) -> ChatResult:
+        body = {
+            "model": self.chat_model,
+            "messages": messages,
+            "stream": False,
+            "options": {
+                "temperature": temperature,
+                "top_p": top_p,
+                "num_predict": max_tokens,
+            },
+        }
+        if system_prompt:
+            body["system"] = system_prompt
+        if tools:
+            body["tools"] = tools
+        data = await self._post("/api/chat", body)
+        msg = data.get("message", {})
+        content = msg.get("content", "")
+        raw_calls = msg.get("tool_calls")
+        tool_calls = None
+        if raw_calls:
+            tool_calls = []
+            for tc in raw_calls:
+                func = tc.get("function", {})
+                tool_calls.append(
+                    ToolCall(
+                        name=func.get("name", ""),
+                        arguments=func.get("arguments", {}),
+                    )
+                )
+        return ChatResult(content=content, tool_calls=tool_calls or None)
+
+    def format_tool_messages(self, tool_calls, results):
+        return [
+            {"role": "tool", "content": results[i], "name": tc.name}
+            for i, tc in enumerate(tool_calls)
+        ]
 
     async def chat_stream(
         self, messages, system_prompt="",

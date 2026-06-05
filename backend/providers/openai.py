@@ -1,6 +1,6 @@
 import json
 import httpx
-from .base import BaseProvider
+from .base import BaseProvider, ChatResult, ToolCall
 
 
 class OpenAIProvider(BaseProvider):
@@ -34,6 +34,52 @@ class OpenAIProvider(BaseProvider):
         data = resp.json()
         await resp.aclose()
         return data["choices"][0]["message"]["content"]
+
+    async def chat_with_tools(
+        self, messages, system_prompt="",
+        temperature=0.7, max_tokens=4096, top_p=0.9,
+        reasoning=True, tools=None,
+    ) -> ChatResult:
+        msgs = list(messages)
+        if system_prompt:
+            msgs.insert(0, {"role": "system", "content": system_prompt})
+        body = {
+            "model": self.chat_model,
+            "messages": msgs,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "top_p": top_p,
+            "stream": False,
+        }
+        if tools:
+            body["tools"] = tools
+        resp = await self._client.post(f"{self.base_url}/chat/completions", json=body)
+        resp.raise_for_status()
+        data = resp.json()
+        await resp.aclose()
+        choice = data["choices"][0]["message"]
+        content = choice.get("content") or ""
+        raw_calls = choice.get("tool_calls")
+        tool_calls = None
+        if raw_calls:
+            tool_calls = []
+            for tc in raw_calls:
+                func = tc.get("function", {})
+                tool_calls.append(
+                    ToolCall(
+                        id=tc.get("id", ""),
+                        name=func.get("name", ""),
+                        arguments=json.loads(func.get("arguments", "{}")),
+                    )
+                )
+        return ChatResult(content=content, tool_calls=tool_calls or None)
+
+    def format_tool_messages(self, tool_calls, results):
+        return [
+            {"role": "tool", "content": results[i], "tool_call_id": tc.id}
+            for i, tc in enumerate(tool_calls)
+            if tc.id
+        ]
 
     async def chat_stream(
         self, messages, system_prompt="",

@@ -1,0 +1,142 @@
+from __future__ import annotations
+
+import asyncio
+import os
+from mcp.server.models import InitializationOptions
+import mcp.types as types
+from mcp.server import NotificationOptions, Server
+from mcp.server.stdio import stdio_server
+
+from db_manager import ChromaManager
+
+server = Server("chromadb-mcp-server")
+db = ChromaManager()
+
+
+@server.list_resources()
+async def handle_list_resources() -> list[types.Resource]:
+    collections = db.list_collections()
+    return [
+        types.Resource(
+            uri=f"chromadb://collections/{c['name']}",
+            name=f"Collection: {c['name']}",
+            description=f"ChromaDB collection '{c['name']}' with {c['count']} files",
+            mimeType="text/plain",
+        )
+        for c in collections
+    ]
+
+
+@server.list_tools()
+async def handle_list_tools() -> list[types.Tool]:
+    return [
+        types.Tool(
+            name="search_chromadb",
+            description=(
+                "Search for relevant documents, context, or information "
+                "in a ChromaDB collection using semantic search."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "collection_name": {
+                        "type": "string",
+                        "description": "Name of the ChromaDB collection to search in",
+                    },
+                    "query": {
+                        "type": "string",
+                        "description": "Semantic search query (what the user is looking for)",
+                    },
+                    "n_results": {
+                        "type": "integer",
+                        "description": "Number of results to return (default 5)",
+                        "default": 5,
+                    },
+                },
+                "required": ["collection_name", "query"],
+            },
+        ),
+        types.Tool(
+            name="list_collections",
+            description=(
+                "List all available ChromaDB collections with their document counts."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {},
+            },
+        ),
+    ]
+
+
+@server.call_tool()
+async def handle_call_tool(
+    name: str, arguments: dict | None
+) -> list[types.TextContent]:
+    if name == "search_chromadb":
+        if not arguments:
+            raise ValueError("Missing arguments")
+        collection_name = arguments.get("collection_name")
+        query = arguments.get("query")
+        n_results = arguments.get("n_results", 5)
+        if not collection_name or not query:
+            raise ValueError("collection_name and query are required")
+
+        try:
+            results = db.search_collection(collection_name, query, n_results)
+        except ValueError as e:
+            return [types.TextContent(type="text", text=str(e))]
+
+        if not results:
+            return [
+                types.TextContent(
+                    type="text",
+                    text=f"No relevant documents found in collection '{collection_name}'.",
+                )
+            ]
+
+        lines = [f"Search results from collection '{collection_name}':"]
+        for r in results:
+            content_preview = r["content"][:500]
+            if len(r["content"]) > 500:
+                content_preview += "..."
+            lines.append(f"\n--- {r['filename']} (chunk {r['chunk']}) ---")
+            lines.append(content_preview)
+
+        return [types.TextContent(type="text", text="\n".join(lines))]
+
+    elif name == "list_collections":
+        collections = db.list_collections()
+        if not collections:
+            return [
+                types.TextContent(
+                    type="text", text="No collections found in ChromaDB."
+                )
+            ]
+        lines = ["Available collections:"]
+        for c in collections:
+            lines.append(f"- {c['name']} ({c['count']} files)")
+        return [types.TextContent(type="text", text="\n".join(lines))]
+
+    else:
+        raise ValueError(f"Unknown tool: {name}")
+
+
+async def main():
+    async with stdio_server() as (read_stream, write_stream):
+        await server.run(
+            read_stream,
+            write_stream,
+            InitializationOptions(
+                server_name="chromadb-mcp-server",
+                server_version="0.1.0",
+                capabilities=server.get_capabilities(
+                    notification_options=NotificationOptions(),
+                    experimental_capabilities={},
+                ),
+            ),
+        )
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

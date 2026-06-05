@@ -271,8 +271,14 @@ export default function ChatPage({ sidebarOpen, setSidebarOpen }: ChatPageProps)
             >
               +RAG
             </button>
+            <button
+              className={`mode-btn ${mode === 'agent' ? 'active' : ''}`}
+              onClick={() => setMode('agent')}
+            >
+              Агент
+            </button>
           </div>
-          {mode === 'rag' && (
+          {(mode === 'rag' || mode === 'agent') && (
             <select
               className="rag-select"
               value={selectedCollection}

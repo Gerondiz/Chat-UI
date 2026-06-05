@@ -1,16 +1,20 @@
 import json
+import logging
 from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
 import config
 from models import ChatRequest, ProviderConfig, ProviderSwitch
-from providers.base import BaseProvider
+from providers.base import BaseProvider, ToolCall
 from providers.ollama import OllamaProvider
 from providers.openai import OpenAIProvider
 from providers.lmstudio import LMStudioProvider
+from mcp_host import mcp_host, run_mcp_host
 import rag
 from file_utils import extract_text_from_file, chunk_text, save_upload
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Chat-UI Backend")
 
@@ -87,6 +91,14 @@ async def startup():
     global current_provider, current_config
     current_config = _default_config("ollama")
     current_provider = _make_provider(current_config)
+    # start MCP host in background
+    import asyncio
+    asyncio.create_task(mcp_host.start())
+    ready = await mcp_host.wait_ready(timeout=5)
+    if ready:
+        logger.info("MCP host ready with tools: %s", [t.name for t in mcp_host.tools])
+    else:
+        logger.warning("MCP host not ready (timeout), agent mode will fall back to RAG")
 
 
 # --- Provider endpoints ---
@@ -160,11 +172,96 @@ def _build_messages(req: ChatRequest) -> list[dict]:
     return msgs
 
 
+def _extract_thinking(resp: str) -> tuple[str, str]:
+    """Split response into (content, thinking) based on <think> tags."""
+    if "<think" in resp and "</think>" in resp:
+        t_start = resp.index("<think")
+        t_end = resp.index("</think>") + len("</think>")
+        thinking = resp[t_start:t_end]
+        content = resp[:t_start] + resp[t_end:]
+        return content, thinking
+    return resp, ""
+
+
+async def _run_agent_loop(
+    messages: list[dict],
+    temperature: float,
+    max_tokens: int,
+    top_p: float,
+    reasoning: bool,
+    max_iterations: int = 5,
+) -> tuple[str, list[dict]]:
+    """Run the agent tool-calling loop. Returns (final_content, all_sources)."""
+    all_sources: list[dict] = []
+    current_messages = list(messages)
+    tool_schemas = mcp_host.get_tool_schemas()
+
+    for iteration in range(max_iterations):
+        result = await current_provider.chat_with_tools(
+            current_messages,
+            system_prompt="",
+            temperature=temperature,
+            max_tokens=max_tokens,
+            top_p=top_p,
+            reasoning=reasoning,
+            tools=tool_schemas,
+        )
+
+        # Append assistant response to conversation
+        assistant_msg: dict = {"role": "assistant", "content": result.content}
+        if result.tool_calls:
+            assistant_msg["tool_calls"] = [
+                {
+                    "function": {
+                        "name": tc.name,
+                        "arguments": json.dumps(tc.arguments) if isinstance(tc.arguments, dict) else tc.arguments,
+                    }
+                }
+                for tc in result.tool_calls
+            ]
+        current_messages.append(assistant_msg)
+
+        if not result.tool_calls:
+            # No tools called — final response
+            return result.content, all_sources
+
+        # Execute tool calls
+        text_results: list[str] = []
+        for tc in result.tool_calls:
+            try:
+                mcp_results = await mcp_host.call_tool(tc.name, tc.arguments)
+                text = "\n".join(r.text for r in mcp_results)
+                text_results.append(text or "No results")
+                # Collect sources from search_chromadb results
+                if tc.name == "search_chromadb":
+                    for r in mcp_results:
+                        all_sources.append({"content": r.text[:200], "filename": tc.arguments.get("collection_name", "unknown")})
+            except Exception as exc:
+                text_results.append(f"Error executing tool '{tc.name}': {exc}")
+                logger.error("Tool call failed: %s(%s) — %s", tc.name, tc.arguments, exc)
+
+        # Append tool results to conversation
+        tool_messages = current_provider.format_tool_messages(result.tool_calls, text_results)
+        current_messages.extend(tool_messages)
+
+    # Max iterations reached — force direct response
+    final = await current_provider.chat(
+        current_messages,
+        system_prompt="",
+        temperature=temperature,
+        max_tokens=max_tokens,
+        top_p=top_p,
+        reasoning=reasoning,
+    )
+    return final, all_sources
+
+
 @app.post("/api/chat")
 async def chat(req: ChatRequest):
     global current_provider
     try:
         context = ""
+        docs = []
         if req.mode == "rag" and req.collection:
             query = req.messages[-1].content if req.messages else ""
             if query:
@@ -177,6 +274,36 @@ async def chat(req: ChatRequest):
                     )
 
         messages = _build_messages(req)
+
+        if req.mode == "agent":
+            if not mcp_host.is_ready:
+                # fallback to direct chat
+                resp = await current_provider.chat(
+                    messages, system_prompt="",
+                    temperature=req.temperature, max_tokens=req.max_tokens,
+                    top_p=req.top_p, reasoning=req.reasoning,
+                )
+                content, thinking = _extract_thinking(resp)
+                return {"role": "assistant", "content": content, "thinking": thinking, "sources": []}
+
+            content, sources = await _run_agent_loop(
+                messages,
+                temperature=req.temperature,
+                max_tokens=req.max_tokens,
+                top_p=req.top_p,
+                reasoning=req.reasoning,
+            )
+            thinking_full = ""
+            final_content = content
+            if "<think" in content and "</think>" in content:
+                final_content, thinking_full = _extract_thinking(content)
+            return {
+                "role": "assistant",
+                "content": final_content,
+                "thinking": thinking_full,
+                "sources": sources,
+            }
+
         if context:
             last_q = req.messages[-1].content if req.messages else ""
             messages.append({"role": "user", "content": context + "\n\nВопрос: " + last_q})
@@ -189,13 +316,7 @@ async def chat(req: ChatRequest):
             top_p=req.top_p,
             reasoning=req.reasoning,
         )
-        thinking = ""
-        content = resp
-        if "<think" in resp and "</think>" in resp:
-            t_start = resp.index("<think")
-            t_end = resp.index("</think>") + len("</think>")
-            thinking = resp[t_start:t_end]
-            content = resp[:t_start] + resp[t_end:]
+        content, thinking = _extract_thinking(resp)
         return {
             "role": "assistant",
             "content": content,
@@ -217,6 +338,64 @@ async def chat_stream(req: ChatRequest):
                 docs = await rag.search_collection(req.collection, query)
 
         messages = _build_messages(req)
+
+        if req.mode == "agent":
+            if not mcp_host.is_ready:
+                # stream directly without tools
+                async def pass_through():
+                    async for token in current_provider.chat_stream(
+                        messages, system_prompt="",
+                        temperature=req.temperature, max_tokens=req.max_tokens,
+                        top_p=req.top_p, reasoning=req.reasoning,
+                    ):
+                        if not token:
+                            continue
+                        yield f"data: {json.dumps({'token': token, 'done': False})}\n\n"
+                    import time
+                    elapsed = time.time()
+                    fallback_done = {
+                        "token": "", "done": True, "full": "", "thinking": "",
+                        "sources": [],
+                        "metrics": {"time_sec": 0, "tokens": 0, "output_time_sec": 0, "output_tokens": 0, "tokens_per_sec": 0},
+                    }
+                    yield f"data: {json.dumps(fallback_done)}\n\n"
+                return StreamingResponse(pass_through(), media_type="text/event-stream")
+
+            # Agent mode: run tool loop, then emit final content directly
+            final_content, sources = await _run_agent_loop(
+                messages,
+                temperature=req.temperature,
+                max_tokens=req.max_tokens,
+                top_p=req.top_p,
+                reasoning=req.reasoning,
+            )
+
+            async def generate_agent():
+                import re
+                content_only = final_content
+                thinking_full = ""
+                if "<think" in final_content and "</think>" in final_content:
+                    thinking_parts = re.findall(r"<think[\s\S]*?</think>", final_content)
+                    thinking_full = "".join(thinking_parts)
+                    content_only = re.sub(r"<think[\s\S]*?</think>", "", final_content)
+
+                words = content_only.split(" ")
+                for i, w in enumerate(words):
+                    token = w + (" " if i < len(words) - 1 else "")
+                    yield f"data: {json.dumps({'token': token, 'done': False})}\n\n"
+
+                done_data = {
+                    "token": "", "done": True, "full": content_only,
+                    "thinking": thinking_full, "sources": sources,
+                    "metrics": {
+                        "time_sec": 0, "tokens": len(words),
+                        "output_time_sec": 0, "output_tokens": len(words),
+                        "tokens_per_sec": 0,
+                    },
+                }
+                yield f"data: {json.dumps(done_data)}\n\n"
+
+            return StreamingResponse(generate_agent(), media_type="text/event-stream")
 
         if docs:
             context = (
@@ -263,10 +442,10 @@ async def chat_stream(req: ChatRequest):
 
             elapsed = __import__("time").time() - start_time
 
+            import re
             content_only = full
             thinking_full = ""
             if "<think" in full and "</think>" in full:
-                import re
                 thinking_parts = re.findall(r"<think[\s\S]*?</think>", full)
                 thinking_full = "".join(thinking_parts)
                 content_only = re.sub(r"<think[\s\S]*?</think>", "", full)
