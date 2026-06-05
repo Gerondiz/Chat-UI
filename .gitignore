@@ -8,3 +8,4 @@ __pycache__/
 .vite/
 *.log
 .venv/
+.gitignore

@@ -156,7 +156,7 @@ class OllamaProvider(BaseProvider):
             body["system"] = system_prompt
         url = f"{self.base_url}/api/chat"
         async with self._client.stream("POST", url, json=body) as resp:
-            thinking_buf = []
+            in_thinking = False
             thinking_tokens = 0
             async for line in resp.aiter_lines():
                 if not line.strip():
@@ -168,17 +168,21 @@ class OllamaProvider(BaseProvider):
                     delta = msg.get("content", "") or ""
 
                     if t:
-                        thinking_buf.append(t)
+                        if not in_thinking:
+                            yield "<think>"
+                            in_thinking = True
+                        yield t
                         thinking_tokens += 1
                     elif delta:
-                        if thinking_buf:
-                            yield f"<think>{''.join(thinking_buf)}</think>"
-                            thinking_buf = []
+                        if in_thinking:
+                            yield "</think>"
+                            in_thinking = False
                         yield delta
 
                     if chunk.get("done"):
-                        if thinking_buf:
-                            yield f"<think>{''.join(thinking_buf)}</think>"
+                        if in_thinking:
+                            yield "</think>"
+                            in_thinking = False
                         stats = {
                             "input_tokens": chunk.get("prompt_eval_count", 0),
                             "output_tokens": chunk.get("eval_count", 0),

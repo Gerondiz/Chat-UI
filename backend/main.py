@@ -201,21 +201,24 @@ def _build_messages(req: ChatRequest) -> list[dict]:
 
 
 def _extract_thinking(resp: str) -> tuple[str, str]:
-    if "<think" in resp:
-        if " response" in resp:
-            t_start = resp.index("<think")
-            t_end = resp.rindex(" response") + len(" response")
-            thinking = resp[t_start:t_end]
-            content = resp[:t_start] + resp[t_end:]
-            return content, thinking
-        if "</think>" in resp:
-            parts = re.findall(r"<think[\s\S]*?</think>", resp)
-            thinking = "".join(parts)
-            content = re.sub(r"<think[\s\S]*?</think>", "", resp)
-            return content, thinking
-        if resp.strip().startswith("<think") and " response" not in resp and "</think>" not in resp:
-            content = resp.replace("<think", "").strip()
-            return content, ""
+    parts = re.findall(r"<think[\s\S]*?</think>", resp)
+    if parts:
+        thinking = "".join(parts)
+        content = re.sub(r"<think[\s\S]*?</think>", "", resp)
+        content = content.replace("</think>", "").replace("<think>", "")
+        return content.strip(), thinking
+    if "<think" in resp and " response" in resp:
+        t_start = resp.index("<think")
+        t_end = resp.rindex(" response") + len(" response")
+        thinking = resp[t_start:t_end]
+        content = resp[:t_start] + resp[t_end:]
+        return content, thinking
+    if "</think>" in resp:
+        content = resp.replace("</think>", "").strip()
+        return content, ""
+    if resp.strip().startswith("<think") and "</think>" not in resp:
+        content = resp.replace("<think", "").strip()
+        return content, ""
     return resp, ""
 
 
@@ -394,9 +397,13 @@ async def chat_stream(req: ChatRequest):
             if not mcp_host.is_ready:
                 # stream directly without tools
                 async def pass_through():
-                    t0 = time.monotonic()
+                    start = time.monotonic()
                     full = ""
                     token_count = 0
+                    output_tokens = 0
+                    output_start = None
+                    lm_stats = None
+
                     async for token in current_provider.chat_stream(
                         messages, system_prompt="",
                         temperature=req.temperature, max_tokens=req.max_tokens,
@@ -404,22 +411,48 @@ async def chat_stream(req: ChatRequest):
                     ):
                         if not token:
                             continue
+                        if token.startswith("__LMSTATS__") and token.endswith("__LMSTATS__"):
+                            lm_stats = json.loads(token[len("__LMSTATS__"):-len("__LMSTATS__")])
+                            continue
                         full += token
                         token_count += 1
+                        if output_start is not None:
+                            output_tokens += 1
                         yield f"data: {json.dumps({'token': token, 'done': False})}\n\n"
-                    elapsed = round(time.monotonic() - t0, 2)
+                        if output_start is None and "<think" not in token:
+                            output_start = time.monotonic()
+
+                    elapsed = round(time.monotonic() - start, 2)
                     content_only, thinking_full = _extract_thinking(full)
-                    if not content_only.strip() and thinking_full:
-                        content_only = thinking_full.replace("<think>", "").replace("</think>", "")
-                        thinking_full = ""
+                    has_thinking = bool(thinking_full)
+                    if has_thinking and output_start is None:
+                        output_start = start
+                        if output_tokens == 0:
+                            output_tokens = token_count
+                    if not has_thinking:
+                        output_tokens = token_count
+                    output_elapsed = round(time.monotonic() - output_start, 2) if output_start else elapsed
+                    tps = round(output_tokens / output_elapsed, 1) if output_elapsed > 0 and output_tokens > 0 else 0
+
+                    metrics = {
+                        "time_sec": elapsed, "tokens": token_count,
+                        "output_time_sec": output_elapsed,
+                        "output_tokens": output_tokens,
+                        "tokens_per_sec": tps,
+                    }
+                    if lm_stats:
+                        metrics["input_tokens"] = lm_stats.get("input_tokens", 0)
+                        lm_out = lm_stats.get("output_tokens", 0)
+                        if lm_out:
+                            metrics["tokens"] = lm_out
+                        metrics["reasoning_tokens"] = lm_stats.get("reasoning_output_tokens", 0)
+                        metrics["lm_tokens_per_sec"] = round(lm_stats.get("tokens_per_second", 0), 1)
+                        metrics["ttft"] = round(lm_stats.get("time_to_first_token_seconds", 0), 2)
+
                     fallback_done = {
-                        "token": "", "done": True, "full": content_only, "thinking": thinking_full,
-                        "sources": [],
-                        "metrics": {
-                            "time_sec": elapsed, "tokens": token_count,
-                            "output_time_sec": elapsed, "output_tokens": token_count,
-                            "tokens_per_sec": round(token_count / elapsed, 1) if elapsed > 0 else 0,
-                        },
+                        "token": "", "done": True, "full": content_only or "",
+                        "thinking": thinking_full, "sources": [],
+                        "metrics": metrics,
                     }
                     yield f"data: {json.dumps(fallback_done)}\n\n"
                 return StreamingResponse(pass_through(), media_type="text/event-stream")
@@ -438,19 +471,35 @@ async def chat_stream(req: ChatRequest):
                 # Response without tool calls — emit directly
                 async def emit_agent():
                     content_only, thinking_full = _extract_thinking(agent_content)
+
+                    thinking_text = thinking_full.replace("<think>", "").replace("</think>", "").strip() if thinking_full else ""
+
+                    # If no content but thinking, put thinking in content (fallback)
                     if not content_only.strip() and thinking_full:
-                        content_only = thinking_full.replace("<think>", "").replace("</think>", "")
+                        content_only = thinking_text
                         thinking_full = ""
 
+                    # Stream thinking first (if any) so the thinking block appears progressively
+                    if thinking_text:
+                        yield f"data: {json.dumps({'token': '<think>', 'done': False})}\n\n"
+                        twords = thinking_text.split(" ")
+                        for i, w in enumerate(twords):
+                            token = w + (" " if i < len(twords) - 1 else "")
+                            yield f"data: {json.dumps({'token': token, 'done': False})}\n\n"
+                            await asyncio.sleep(0.03)
+                        yield f"data: {json.dumps({'token': '</think>', 'done': False})}\n\n"
+
+                    # Stream content words
                     words = content_only.split(" ")
                     char_count = len(content_only)
-                    token_est = max(len(words), char_count // 4)
-
                     for i, w in enumerate(words):
                         token = w + (" " if i < len(words) - 1 else "")
                         yield f"data: {json.dumps({'token': token, 'done': False})}\n\n"
+                        if i < len(words) - 1:
+                            await asyncio.sleep(0.03)
 
                     elapsed = round(time.monotonic() - agent_start, 2)
+                    token_est = max(len(words), char_count // 4)
                     done_data = {
                         "token": "", "done": True, "full": content_only,
                         "thinking": thinking_full, "sources": sources,
@@ -582,6 +631,9 @@ async def chat_stream(req: ChatRequest):
             elapsed = round(time.monotonic() - start_time, 2)
 
             content_only, thinking_full = _extract_thinking(full)
+            if not content_only.strip() and thinking_full:
+                content_only = thinking_full.replace("<think>", "").replace("</think>", "")
+                thinking_full = ""
             has_thinking = bool(thinking_full)
             if has_thinking and output_start is None:
                 output_start = start_time

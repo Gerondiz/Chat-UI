@@ -436,18 +436,18 @@ export default function ChatPage({ sidebarOpen, setSidebarOpen }: ChatPageProps)
               {msg.role === 'assistant' && msg.metrics && (
                 <div className="metrics-bar">
                   ⏱ {msg.metrics.time_sec}с · {msg.metrics.tokens} токенов
-                  {msg.metrics.lm_tokens_per_sec ? (
+                  {typeof msg.metrics.lm_tokens_per_sec === 'number' ? (
                     <>
-                      {msg.metrics.input_tokens && msg.metrics.input_tokens > 0 && (
+                      {msg.metrics.input_tokens ? (
                         <> · вход: {msg.metrics.input_tokens}</>
-                      )}
-                      {msg.metrics.reasoning_tokens && msg.metrics.reasoning_tokens > 0 && (
+                      ) : null}
+                      {msg.metrics.reasoning_tokens ? (
                         <> · размышления: {msg.metrics.reasoning_tokens}</>
-                      )}
+                      ) : null}
                       · {Number(msg.metrics.lm_tokens_per_sec).toFixed(1)} ток/с
-                      {msg.metrics.ttft && msg.metrics.ttft > 0 && (
+                      {msg.metrics.ttft ? (
                         <> · TTFT: {Number(msg.metrics.ttft).toFixed(2)}с</>
-                      )}
+                      ) : null}
                     </>
                   ) : (
                     msg.metrics.output_tokens > 0 && (
