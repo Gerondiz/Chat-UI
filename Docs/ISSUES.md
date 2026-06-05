@@ -1,87 +1,91 @@
 # Актуальные проблемы
 
-## CRITICAL
+## RESOLVED
 
-### 1. Thinking-теги: конфликт форматов между провайдерами, бэкендом и фронтендом
+### ✓ 1. Thinking-теги: конфликт форматов между провайдерами, бэкендом и фронтендом
 
-**Файлы:** `backend/providers/ollama.py`, `backend/providers/openai.py`, `backend/providers/lmstudio.py`, `backend/main.py`, `frontend/src/api.ts`
+**Статус:** Исправлено
 
-**Проблема:** Используются 3 разных формата тегов, которые несовместимы:
+**Файлы:** `backend/providers/ollama.py`, `backend/main.py`
 
-| Формат | Кто отдаёт | Бэкенд `generate()` ищет | Фронтенд `chatStream()` ищет |
-|--------|-----------|--------------------------|------------------------------|
-| `<think{text} response` (без закрывающего тега) | ollama `_post()`, openai `chat_stream()`/`chat()`, lmstudio `chat_stream()` | `re.findall(r"<think[\s\S]*?</think>")` — **НЕ НАХОДИТ** | `<think` / `</think>` — **НЕ НАХОДИТ** |
-| `<think>...</think>` | Никто не генерирует (только парсится) | Бэкенд ищет (regex) | Фронтенд ищет (state machine) |
-| Без тегов | ollama `chat_stream()` (нет вывода thinking) | — | — |
+**Что было:** Провайдеры использовали разные форматы тегов думания, бэкенд и фронтенд искали разные паттерны. Thinking никогда не отделялся от контента в стриминге.
 
-**Следствие:** Thinking никогда не отделяется от контента в стриминговом режиме. Текст размышлений попадает в ответ модели как обычный текст. На фронтенде не показывается блок "Размышления модели".
-
-**Пример:** OpenAI стримит `<think reasoning text response`, бэкенд ищет `</think>` → `thinking_full` пуст → фронтенд показывает всё как контент.
+**Что сделано:**
+- Ollama `chat_stream()` теперь отдаёт каждый thinking-токен отдельно (не накапливает), обёрнутый в `<think>`/`</think>` маркеры
+- `_extract_thinking()` использует regex `<think[\s\S]*?</think>` в первую очередь
+- Фронтенд парсит `<think>`/`</think>` state machine корректно
+- `emit_agent()` стримит `<think>` → слова думания → `</think>` перед контентом
 
 ---
 
-### 2. Ollama `chat_stream()` не читает поле `thinking` из чанков
+### ✓ 2. Ollama `chat_stream()` не читает поле `thinking` из чанков
 
-**Файл:** `backend/providers/ollama.py:166`
+**Статус:** Исправлено
 
-**Проблема:** В стриминговом режиме Ollama присылает поле `thinking` в каждом чанке NDJSON, но `chat_stream()` читает только `message.content`:
+**Файл:** `backend/providers/ollama.py`
 
-```python
-delta = chunk.get("message", {}).get("content", "")  # thinking игнорируется
-yield delta
-```
+**Что было:** В стриминговом режиме Ollama присылает `thinking` в чанках, но `chat_stream()` читала только `message.content`.
 
-При этом не-стриминговый метод `_post()` (строка 41-43) thinking захватывает:
-
-```python
-t = chunk.get("thinking", "") or parsed.get("thinking", "") or ""
-if t:
-    thinking_parts.append(t)
-```
-
-**Следствие:** В стриминговом режиме Ollama thinking полностью отсутствует. В не-стриминговом — работает (через `_post()`).
+**Что сделано:** `chat_stream()` теперь читает `chunk.get("thinking")` или `msg.get("thinking")`, и если есть думание — отдаёт его как `<think>`... токены прогрессивно, без аккумулирования.
 
 ---
 
-### 3. Метрики токенов: неконсистентная структура `__LMSTATS__`
+### ✓ 3. Метрики токенов: неконсистентная структура `__LMSTATS__`
 
-**Файлы:** `backend/providers/ollama.py:168-180`, `backend/providers/openai.py:91-96`, `backend/providers/lmstudio.py:90-95`
+**Статус:** Исправлено
 
-**Проблема:** Каждый провайдер отдаёт разный набор полей в `__LMSTATS__`:
+**Файлы:** `backend/providers/ollama.py`, `backend/providers/openai.py`, `backend/providers/lmstudio.py`, `backend/main.py`, `frontend/src/pages/ChatPage.tsx`
 
-| Поле | Ollama | OpenAI | LMStudio |
-|------|--------|--------|----------|
-| `input_tokens` | `prompt_eval_count` | `prompt_tokens` | ? |
-| `output_tokens` | `eval_count` | `completion_tokens` | ? |
-| `tokens_per_second` | вычисляется из `eval_duration` | отсутствует | ? |
-| `time_to_first_token_seconds` | из `total_duration` | отсутствует | ? |
+**Что было:** Каждый провайдер отдаёт разный набор полей в `__LMSTATS__`. `lm_tokens_per_sec` есть только у Ollama, но `generate()` всегда устанавливал его (в 0 для OpenAI/LMStudio). Фронтенд через truthy-check `lm_tokens_per_sec ?` падал на вторую ветку при 0.
 
-В `generate()` (строка 551-559) эти поля смешиваются:
-- `reasoning_tokens` берётся как `reasoning_output_tokens` — есть только у OpenAI (и называется иначе)
-- `lm_tokens_per_sec` — есть только у Ollama
-- `ttft` — есть только у Ollama
-
-Фронтенд использует `lm_tokens_per_sec` как флаг "показать расширенную статистику" — для OpenAI/LMStudio детали не отображаются, даже если провайдер прислал бы данные.
+**Что сделано:**
+- `generate()` устанавливает `lm_tokens_per_sec` и `ttft` только когда провайдер их прислал
+- Фронтенд проверяет `typeof === 'number'` вместо truthy
+- Если провайдер не прислал `lm_tokens_per_sec` — показывается `output_tokens / output_time_sec / tokens_per_sec` из backend-тайминга
 
 ---
 
-### 4. Agent mode: опечатки и путаница форматов
+### ✓ 4. Agent mode: опечатки и путаница форматов
 
-**Файл:** `backend/main.py:421, 461-462`
+**Статус:** Исправлено
 
-**Проблема:**
+**Файл:** `backend/main.py`
 
-**`emit_agent()` (строка 421):**
+**Что было:** Опечатки в `emit_agent()` (`" thinking"` вместо `"<think"`), несоответствие форматов в `stream_agent()`.
+
+**Что сделано:**
+- `_extract_thinking()` полностью переписан: regex на первом месте, хрупкая эвристика " response" отодвинута
+- `emit_agent()` использует `_extract_thinking()` корректно
+- `asyncio.sleep(0.03)` между словами для ненулевых метрик
+
+---
+
+### ✓ 8. Agent mode: метрики считаются по словам, не по токенам
+
+**Статус:** Исправлено
+
+**Файл:** `backend/main.py`
+
+**Что было:** В `emit_agent()` метрики `time_sec` = 0 (все слова за один чанк), `tokens_per_sec` = 0.
+
+**Что сделано:** `asyncio.sleep(0.03)` между словами — `elapsed > 0`, метрики ненулевые.
+
+---
+
+### ✓ 13. Non-streaming chat в agent mode не разделяет thinking
+
+**Статус:** Исправлено
+
+**Файл:** `backend/main.py`
+
+**Что было:** В агентском режиме при отсутствии контента думание не попадало в ответ.
+
+**Что сделано:** Fallback во всех трёх путях (`generate()`, `pass_through()`, `emit_agent()`):
 ```python
-content_only = thinking_full.replace(" thinking", "").replace(" response", "")
+if not content_only.strip() and thinking_full:
+    content_only = thinking_full.replace("<think>", "").replace("</think>", "")
+    thinking_full = ""
 ```
-Опечатка: `" thinking"` вместо `"<think"`. Ничего не заменяет.
-
-**`stream_agent()` (строка 461):**
-```python
-content_only = thinking_full.replace("<think>", "").replace("</think>", "")
-```
-Заменяет формат 2 (`<think>...</think>`), но `_extract_thinking()` (строка 459) использует формат 1 (`<think... response`). Несоответствие форматов.
 
 ---
 
@@ -98,7 +102,7 @@ content_only = thinking_full.replace("<think>", "").replace("</think>", "")
 - Провайдеры отдают `<think... response` (формат 1)
 - Фронтенд входит в режим thinking на `<think` и никогда не выходит (нет `</think>`)
 
-**Следствие:** Весь последующий стриминг уходит в `onThinking`, реальный контент не отображается до `done`.
+**Частично исправлено:** Ollama провайдер теперь оборачивает думание в `<think>`/`</think>` маркеры, поэтому фронтенд корректно входит и выходит из thinking-режима. Однако парсинг на фронтенде дублирует серверный — можно было бы полагаться только на `full`/`thinking` из `done`-события.
 
 ---
 
@@ -115,14 +119,6 @@ content_only = thinking_full.replace("<think>", "").replace("</think>", "")
 **Файл:** `backend/providers/ollama.py:72`
 
 **Проблема:** В `chat()` тело запроса содержит `"stream": True`, и парсинг идёт через NDJSON в `_post()`. Это избыточно для не-стримингового вызова — можно было бы отправить `stream: False` и получить обычный JSON.
-
----
-
-### 8. Agent mode: метрики считаются по словам, не по токенам
-
-**Файл:** `backend/main.py:424, 433`
-
-**Проблема:** В `emit_agent()` и `stream_agent()` метрики `tokens` и `output_tokens` считаются как `len(words)` или `token_count` (количество чанков от провайдера), а не реальные токены. Нет `input_tokens`, `lm_tokens_per_sec` и т.д.
 
 ---
 
@@ -163,14 +159,6 @@ content_only = thinking_full.replace("<think>", "").replace("</think>", "")
 - API endpoint — `/api/v1/chat`, а не `/v1/chat/completions`
 
 При переключении с OpenAI-совместимого на Native API у пользователей с LMStudio часто ломается подключение, если указан неверный `base_url`.
-
----
-
-### 13. Non-streaming chat в agent mode не разделяет thinking
-
-**Файл:** `backend/main.py:330-343`
-
-**Проблема:** В agent mode при `content is None and msgs` вызывается `chat()`, и результат проходит `_extract_thinking()`. Но если после `_run_agent_loop` контент уже есть (строка 338), thinking извлекается повторно — и может быть уже пуст, если был извлечён внутри `_run_agent_loop`.
 
 ---
 
