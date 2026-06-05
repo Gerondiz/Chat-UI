@@ -85,8 +85,7 @@ async def _fetch_page(client: httpx.AsyncClient, url: str) -> str:
 
 async def search_web(query: str, max_results: int = 5) -> list[dict[str, str]]:
     """Search the web using DuckDuckGo and fetch page content."""
-    with DDGS() as ddgs:
-        raw = list(ddgs.text(query, max_results=max_results))
+    raw = await _safe_ddgs_call("text", query, max_results=max_results)
 
     urls: list[str] = []
     for r in raw:
@@ -112,4 +111,41 @@ async def search_web(query: str, max_results: int = 5) -> list[dict[str, str]]:
             item["content"] = content
         results.append(item)
 
+    return results
+
+
+async def _safe_ddgs_call(method: str, query: str, **kwargs):
+    """Call DDGS method with retry on rate limit."""
+    import random
+    for attempt in range(5):
+        try:
+            with DDGS() as ddgs:
+                fn = getattr(ddgs, method)
+                result = fn(query, **kwargs)
+                return list(result) if result else []
+        except Exception as exc:
+            if attempt < 4:
+                wait = 2 ** (attempt + 1) + random.uniform(0, 1)
+                logger.warning("DDGS %s failed (attempt %d), retrying in %.1fs...", method, attempt + 1, wait)
+                await asyncio.sleep(wait)
+            else:
+                logger.error("DDGS %s failed after 5 attempts: %s", method, exc)
+                return []
+    return []
+
+
+async def search_images(query: str, max_results: int = 5) -> list[dict[str, str]]:
+    """Search for images using DuckDuckGo."""
+    raw = await _safe_ddgs_call("images", query, max_results=max_results, region="wt-wt")
+
+    results: list[dict[str, str]] = []
+    for r in raw:
+        results.append({
+            "title": r.get("title", ""),
+            "image_url": r.get("image", ""),
+            "thumbnail": r.get("thumbnail", ""),
+            "source_url": r.get("url", ""),
+            "width": str(r.get("width", "")),
+            "height": str(r.get("height", "")),
+        })
     return results

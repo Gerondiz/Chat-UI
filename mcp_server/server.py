@@ -9,7 +9,7 @@ from mcp.server.stdio import stdio_server
 
 from datetime import datetime
 from db_manager import ChromaManager
-from web_search import search_web
+from web_search import search_images, search_web
 
 server = Server("chromadb-mcp-server")
 db = ChromaManager()
@@ -100,6 +100,28 @@ async def handle_list_tools() -> list[types.Tool]:
                 "properties": {},
             },
         ),
+        types.Tool(
+            name="search_images",
+            description=(
+                "Search the internet for images. "
+                "Returns image URLs that can be displayed directly in the chat "
+                "using markdown: ![alt](image_url)."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Search query for images",
+                    },
+                    "max_results": {
+                        "type": "integer",
+                        "description": "Number of image results to return (default 5)",
+                    },
+                },
+                "required": ["query"],
+            },
+        ),
     ]
 
 
@@ -167,6 +189,23 @@ async def handle_call_tool(
             lines.append(f"   Snippet: {r['snippet']}")
             if r.get("content"):
                 lines.append(f"   Content:\n{r['content']}")
+        return [types.TextContent(type="text", text="\n".join(lines))]
+
+    elif name == "search_images":
+        if not arguments or not arguments.get("query"):
+            raise ValueError("query is required")
+        query = arguments["query"]
+        max_results = arguments.get("max_results", 5)
+        results = await search_images(query, max_results)
+        if not results:
+            return [types.TextContent(type="text", text=f"No images found for '{query}'.")]
+        lines = [f"Image search results for '{query}':"]
+        for i, r in enumerate(results, 1):
+            lines.append(f"\n{i}. {r['title']}")
+            lines.append(f"   URL: {r['image_url']}")
+            lines.append(f"   Source: {r['source_url']}")
+            lines.append(f"   Size: {r['width']}x{r['height']}")
+            lines.append(f"   Markdown: ![Image {i}]({r['image_url']})")
         return [types.TextContent(type="text", text="\n".join(lines))]
 
     elif name == "get_current_time":
