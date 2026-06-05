@@ -23,6 +23,7 @@ const DEFAULT_SETTINGS: ChatSettings = {
 
 const PROVIDERS: { id: string; label: string }[] = [
   { id: 'ollama', label: 'Ollama' },
+  { id: 'openai', label: 'LMStudio (OpenAI)' },
   { id: 'lmstudio', label: 'LMStudio (Native)' },
 ]
 
