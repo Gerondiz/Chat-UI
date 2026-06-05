@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-import re
+import asyncio
 import logging
+import re
 from html.parser import HTMLParser
 from urllib.parse import urlparse
 
@@ -90,7 +91,6 @@ def search_web(query: str, max_results: int = 5) -> list[dict[str, str]]:
     with DDGS() as ddgs:
         raw = list(ddgs.text(query, max_results=max_results))
 
-    import asyncio
     results: list[dict[str, str]] = []
     for r in raw:
         url = r.get("href", "")
