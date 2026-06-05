@@ -151,33 +151,68 @@ async def search_web(query: str, max_results: int = 5) -> list[dict[str, str]]:
 
 
 async def search_images(query: str, max_results: int = 5) -> list[dict[str, str]]:
-    """Search for images using DuckDuckGo. Validates URLs and falls back to thumbnails."""
-    raw = await _safe_ddgs_call("images", query, max_results=max_results, region="wt-wt")
+    """Search for images using Wikimedia Commons API (free, no key needed)."""
+    from urllib.parse import quote
 
-    candidates: list[dict[str, str]] = []
-    for r in raw:
-        candidates.append({
-            "title": r.get("title", ""),
-            "image_url": r.get("image", ""),
-            "thumbnail": r.get("thumbnail", ""),
-            "source_url": r.get("url", ""),
-            "width": str(r.get("width", "")),
-            "height": str(r.get("height", "")),
-        })
+    headers = {"User-Agent": "Chat-UI/1.0 (https://github.com/Gerondiz/Chat-UI; chatbot)"}
 
-    async with httpx.AsyncClient(timeout=5.0, follow_redirects=False) as client:
-        checks = await asyncio.gather(
-            *(_validate_image_url(client, c["image_url"]) for c in candidates),
-            return_exceptions=True,
-        )
+    search_url = (
+        "https://commons.wikimedia.org/w/api.php"
+        "?action=query"
+        "&list=search"
+        f"&srsearch={quote(query)}"
+        "&srnamespace=6"
+        "&format=json"
+        f"&srlimit={max_results}"
+    )
+
+    try:
+        async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT, headers=headers) as client:
+            resp = await client.get(search_url)
+            resp.raise_for_status()
+            data = resp.json()
+    except Exception as exc:
+        logger.error("Wikimedia search failed: %s", exc)
+        return []
+
+    titles = [s["title"] for s in data.get("query", {}).get("search", [])]
+    if not titles:
+        return []
+
+    # Batch fetch image info
+    info_url = (
+        "https://commons.wikimedia.org/w/api.php"
+        "?action=query"
+        f"&titles={'|'.join(quote(t) for t in titles)}"
+        "&prop=imageinfo"
+        "&iiprop=url|dimensions|mime"
+        "&format=json"
+    )
+
+    try:
+        async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT, headers=headers) as client:
+            resp = await client.get(info_url)
+            resp.raise_for_status()
+            data = resp.json()
+    except Exception as exc:
+        logger.error("Wikimedia image info failed: %s", exc)
+        return []
 
     results: list[dict[str, str]] = []
-    for i, c in enumerate(candidates):
-        valid = isinstance(checks[i], str) and bool(checks[i])
-        if not valid and c["thumbnail"]:
-            c["image_url"] = c["thumbnail"]
-            results.append(c)
+    for pid, page in data.get("query", {}).get("pages", {}).items():
+        if pid == "-1":
             continue
-        results.append(c)
+        ii = (page.get("imageinfo") or [{}])[0]
+        url_val = ii.get("url", "")
+        if not url_val:
+            continue
+        results.append({
+            "title": page.get("title", query).replace("File:", "", 1),
+            "image_url": url_val,
+            "source_url": ii.get("descriptionurl", ""),
+            "thumbnail": ii.get("thumburl", url_val),
+        })
+        if len(results) >= max_results:
+            break
 
     return results
