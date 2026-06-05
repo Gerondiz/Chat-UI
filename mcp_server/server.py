@@ -104,10 +104,11 @@ async def handle_list_tools() -> list[types.Tool]:
             name="search_images",
             description=(
                 "Search the internet for images. "
-                "Returns image URLs that you MUST display directly in the chat "
-                "using markdown image syntax: ![description](image_url). "
-                "DO NOT just list URLs or tell the user to search manually — "
-                "show the images inline in your response."
+                "The result already contains the markdown image syntax (e.g. ![title](url)) "
+                "that you MUST copy-paste directly into your response. "
+                "YOUR RESPONSE MUST INCLUDE these markdown image lines — "
+                "do not describe the images, show them. "
+                "DO NOT list URLs as text or suggest the user search elsewhere."
             ),
             inputSchema={
                 "type": "object",
@@ -201,13 +202,13 @@ async def handle_call_tool(
         results = await search_images(query, max_results)
         if not results:
             return [types.TextContent(type="text", text=f"No images found for '{query}'.")]
-        lines = [f"Image search results for '{query}':"]
+        lines = [f"I searched for '{query}' and found these images. YOU MUST DISPLAY THEM using the markdown below:"]
         for i, r in enumerate(results, 1):
-            lines.append(f"\n{i}. {r['title']}")
-            lines.append(f"   URL: {r['image_url']}")
-            lines.append(f"   Source: {r['source_url']}")
-            lines.append(f"   Size: {r['width']}x{r['height']}")
-            lines.append(f"   Markdown: ![Image {i}]({r['image_url']})")
+            lines.append("")
+            lines.append(f"![{r['title']}]({r['image_url']})")
+            lines.append(f"[Source: {r['source_url']}]")
+        lines.append("")
+        lines.append("IMPORTANT: Copy-paste the markdown image lines above into your response to show the user the images.")
         return [types.TextContent(type="text", text="\n".join(lines))]
 
     elif name == "get_current_time":
