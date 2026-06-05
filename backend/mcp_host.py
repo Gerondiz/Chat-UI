@@ -53,7 +53,15 @@ class McpHost:
                         len(self._tools),
                         [t.name for t in self._tools],
                     )
-                    await asyncio.Event().wait()
+                    # Heartbeat: periodically check the server is alive
+                    while True:
+                        try:
+                            await asyncio.sleep(30)
+                            await session.list_tools()
+                        except Exception:
+                            logger.warning("MCP server heartbeat failed — marking as not ready")
+                            self._ready.clear()
+                            break
         except Exception as exc:
             logger.error("MCP host failed to start: %s", exc)
 

@@ -66,12 +66,11 @@ async def run_agent_loop(
                 mcp_results = await mcp_host.call_tool(tc.name, tc.arguments)
                 text = "\n".join(r.text for r in mcp_results)
                 text_results.append(text or "No results")
-                if tc.name == "search_chromadb":
-                    for r in mcp_results:
-                        all_sources.append({
-                            "content": r.text[:200],
-                            "filename": tc.arguments.get("collection_name", "unknown"),
-                        })
+                for r in mcp_results:
+                    all_sources.append({
+                        "content": r.text[:200],
+                        "filename": tc.arguments.get("collection_name") or tc.arguments.get("query", tc.name),
+                    })
             except Exception as exc:
                 text_results.append(f"Error executing tool '{tc.name}': {exc}")
                 logger.error("Tool call failed: %s(%s) — %s", tc.name, tc.arguments, exc)
