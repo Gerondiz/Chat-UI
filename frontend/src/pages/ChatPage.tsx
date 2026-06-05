@@ -136,7 +136,7 @@ export default function ChatPage({ sidebarOpen, setSidebarOpen, page, onPageChan
   const providerLabel = PROVIDERS.find(p => p.id === providerName)?.label || providerName
 
   return (
-    <div className="app">
+    <>
       <Sidebar
         open={sidebarOpen}
         onToggle={() => setSidebarOpen(!sidebarOpen)}
@@ -171,7 +171,7 @@ export default function ChatPage({ sidebarOpen, setSidebarOpen, page, onPageChan
                 )}
               </div>
               <div className="mode-toggle">
-                {(['chat', 'rag', 'agent'] as const).map(m => (
+                {(['agent', 'chat', 'rag'] as const).map(m => (
                   <button key={m} className={`mode-btn ${mode === m ? 'active' : ''}`}
                     onClick={() => setMode(m)}>
                     {m === 'chat' ? 'Чат' : m === 'rag' ? '+RAG' : 'Агент'}
@@ -300,6 +300,6 @@ export default function ChatPage({ sidebarOpen, setSidebarOpen, page, onPageChan
           )}
         </div>
       </main>
-    </div>
+    </>
   )
 }

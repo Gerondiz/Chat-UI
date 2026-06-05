@@ -20,7 +20,7 @@ export function useChat() {
   const [metrics, setMetrics] = useState<Metrics | null>(null)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [contextUsed, setContextUsed] = useState(0)
-  const [mode, setMode] = useState('chat')
+  const [mode, setMode] = useState('agent')
   const [collections, setCollections] = useState<{ name: string; count: number }[]>([])
   const [selectedCollection, setSelectedCollection] = useState('')
   const [settings, setSettings] = useState<ChatSettings>({
