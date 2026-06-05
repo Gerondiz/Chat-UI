@@ -1,6 +1,6 @@
-import { useState, useRef, useCallback } from 'react'
+import { useState, useRef, useCallback, useEffect } from 'react'
 import * as api from '../api'
-import type { Message, ChatSettings, Source, Metrics } from '../types'
+import type { Message, ChatSettings, Source, Metrics, ChatSummary } from '../types'
 
 const generateId = (): string => {
   if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID()
@@ -27,7 +27,88 @@ export function useChat() {
     systemPrompt: '', temperature: 0.7, maxTokens: 4096, topP: 0.9, contextLength: 131072,
   })
 
+  const [chats, setChats] = useState<ChatSummary[]>([])
+  const [activeChatId, setActiveChatId] = useState<number | null>(null)
+
   const abortRef = useRef<(() => void) | null>(null)
+  const messagesRef = useRef(messages)
+  messagesRef.current = messages
+  const activeChatIdRef = useRef(activeChatId)
+  activeChatIdRef.current = activeChatId
+
+  useEffect(() => { api.getChats().then(setChats).catch(() => {}) }, [])
+
+  const ensureChat = useCallback(async () => {
+    if (activeChatIdRef.current) return activeChatIdRef.current
+    const chat = await api.createChat()
+    setActiveChatId(chat.id)
+    setChats(prev => [{ id: chat.id, title: chat.title, message_count: 0, created_at: '', updated_at: '' }, ...prev])
+    return chat.id
+  }, [])
+
+  const saveMessages = useCallback(async () => {
+    const chatId = activeChatIdRef.current
+    if (!chatId) return
+    const msgs = messagesRef.current
+    if (msgs.length === 0) return
+    try {
+      await api.saveChatMessages(chatId, msgs)
+      const updated = await api.getChats()
+      setChats(updated)
+      const title = msgs[0]?.content?.slice(0, 60) || 'Новый чат'
+      if (msgs.length > 0) {
+        api.renameChat(chatId, title).catch(() => {})
+      }
+    } catch { /* ignore */ }
+  }, [])
+
+  const selectChat = useCallback(async (chatId: number) => {
+    if (abortRef.current) abortRef.current()
+    if (activeChatIdRef.current && messagesRef.current.length > 0) {
+      await saveMessages()
+    }
+    setActiveChatId(chatId)
+    setStreamText('')
+    setStreamThinking('')
+    setStreaming(false)
+    setLoading(false)
+    setError('')
+    setSources([])
+    setMetrics(null)
+    setEditingId(null)
+    setInput('')
+    setContextUsed(0)
+
+    const msgs = await api.getChatMessages(chatId)
+    setMessages(msgs)
+  }, [saveMessages])
+
+  const createNewChat = useCallback(async () => {
+    if (abortRef.current) abortRef.current()
+    if (activeChatIdRef.current && messagesRef.current.length > 0) {
+      await saveMessages()
+    }
+    setActiveChatId(null)
+    setMessages([])
+    setStreamText('')
+    setStreamThinking('')
+    setStreaming(false)
+    setLoading(false)
+    setError('')
+    setSources([])
+    setMetrics(null)
+    setEditingId(null)
+    setInput('')
+    setContextUsed(0)
+  }, [saveMessages])
+
+  const deleteChat = useCallback(async (chatId: number) => {
+    await api.deleteChat(chatId)
+    setChats(prev => prev.filter(c => c.id !== chatId))
+    if (activeChatIdRef.current === chatId) {
+      createNewChat()
+    }
+  }, [createNewChat])
 
   const handleStop = useCallback(() => {
     if (abortRef.current) {
@@ -45,6 +126,8 @@ export function useChat() {
     setMetrics(null)
     setEditingId(null)
 
+    const chatId = await ensureChat()
+
     const userMsg: Message = { role: 'user', content: text, id: generateId(), ts: Date.now() }
     const updated = [...baseMessages, userMsg]
     setMessages(updated)
@@ -55,6 +138,13 @@ export function useChat() {
     setStreamText('')
     setStreamThinking('')
     setSources([])
+
+    // Auto-title from first user message
+    if (updated.length <= 2) {
+      const title = text.slice(0, 60)
+      api.renameChat(chatId, title).catch(() => {})
+      setChats(prev => prev.map(c => c.id === chatId ? { ...c, title } : c))
+    }
 
     abortRef.current = api.chatStream(
       updated,
@@ -80,7 +170,10 @@ export function useChat() {
             thinking: thinking || '', metrics: met || null,
             id: generateId(), ts: Date.now(),
           }
-          return [...prev, newMsg]
+          const result = [...prev, newMsg]
+          // Save after every response
+          api.saveChatMessages(chatId, result).catch(() => {})
+          return result
         })
         setSources(srcs || [])
         setMetrics(met || null)
@@ -88,6 +181,8 @@ export function useChat() {
           const inp = met.input_tokens || 0
           if (inp > 0) setContextUsed(inp + (met.tokens || 0))
         }
+        // Refresh chat list
+        api.getChats().then(setChats).catch(() => {})
       },
       (err: string) => {
         setStreaming(false)
@@ -95,7 +190,7 @@ export function useChat() {
         setError(err)
       },
     )
-  }, [loading, settings, mode, selectedCollection, showThinking])
+  }, [loading, settings, mode, selectedCollection, showThinking, ensureChat])
 
   const handleSend = useCallback(async () => {
     const text = input.trim()
@@ -142,22 +237,16 @@ export function useChat() {
   }, [loading, messages, doSend])
 
   const handleNewChat = useCallback(() => {
-    if (abortRef.current) abortRef.current()
-    setMessages([])
-    setStreamText('')
-    setStreamThinking('')
-    setStreaming(false)
-    setLoading(false)
-    setError('')
-    setSources([])
-    setMetrics(null)
-    setEditingId(null)
-    setInput('')
-    setContextUsed(0)
-  }, [])
+    createNewChat()
+  }, [createNewChat])
 
   const handleCopy = useCallback(async (content: string) => {
     try { await navigator.clipboard.writeText(content) } catch { /* ignore */ }
+  }, [])
+
+  const cancelEdit = useCallback(() => {
+    setEditingId(null)
+    setInput('')
   }, [])
 
   return {
@@ -169,6 +258,7 @@ export function useChat() {
     selectedCollection, setSelectedCollection,
     settings, setSettings,
     handleSend, handleEdit, handleRegenerate, handleRetry, handleCopy,
-    handleStop, handleNewChat, doSend,
+    handleStop, handleNewChat, doSend, cancelEdit,
+    chats, activeChatId, selectChat, deleteChat,
   }
 }

@@ -10,4 +10,5 @@ __pycache__/
 .venv/
 .gitignore
 chatui.db
-.pytest_cache/chatui.db*
+chatui.db*
+.pytest_cache/

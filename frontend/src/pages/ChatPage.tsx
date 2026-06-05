@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import SettingsPanel from '../components/SettingsPanel'
+import Sidebar from '../components/Sidebar'
 import * as api from '../api'
 import { useChat } from '../hooks/useChat'
 import { useProviders } from '../hooks/useProviders'
@@ -80,9 +81,11 @@ function MessageBubble({ msg, showThinking, onCopy, onEdit, onRegenerate }:
 interface ChatPageProps {
   sidebarOpen: boolean
   setSidebarOpen: (open: boolean) => void
+  page: string
+  onPageChange: (page: string) => void
 }
 
-export default function ChatPage({ sidebarOpen, setSidebarOpen }: ChatPageProps) {
+export default function ChatPage({ sidebarOpen, setSidebarOpen, page, onPageChange }: ChatPageProps) {
   const {
     messages, input, setInput,
     loading, streaming, streamText, streamThinking,
@@ -92,7 +95,8 @@ export default function ChatPage({ sidebarOpen, setSidebarOpen }: ChatPageProps)
     selectedCollection, setSelectedCollection,
     settings, setSettings,
     handleSend, handleEdit, handleRegenerate, handleRetry, handleCopy,
-    handleStop, handleNewChat,
+    handleStop, handleNewChat, doSend, cancelEdit,
+    chats, activeChatId, selectChat, deleteChat,
   } = useChat()
 
   const {
@@ -125,162 +129,177 @@ export default function ChatPage({ sidebarOpen, setSidebarOpen }: ChatPageProps)
   useEffect(() => { scrollToBottom() }, [messages, streamText, scrollToBottom])
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Escape' && editingId) { setEditingId(null); setInput(''); return }
+    if (e.key === 'Escape' && editingId) { cancelEdit(); return }
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend() }
   }
 
   const providerLabel = PROVIDERS.find(p => p.id === providerName)?.label || providerName
 
   return (
-    <div className="chat-page">
-      {/* Header */}
-      <div className="chat-header">
-        <button className="menu-btn" onClick={() => setSidebarOpen(!sidebarOpen)}>☰</button>
-        <div className="chat-status">
-          <span className={`status-dot ${providerOnline ? 'online' : 'offline'}`} />
-          <span className="status-text">{providerLabel}{chatModel ? ` · ${chatModel}` : ''}</span>
-        </div>
-        <div className="chat-header-controls">
-          <div className="provider-select-group">
-            <select className="header-select" value={providerName}
-              onChange={(e) => handleSwitchProvider(e.target.value)}>
-              {PROVIDERS.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
-            </select>
-            {chatModels.length > 0 && (
-              <select className="header-select" value={chatModel}
-                onChange={(e) => handleSelectModel(e.target.value)}>
-                {chatModels.map(m => <option key={m} value={m}>{m}</option>)}
-              </select>
-            )}
-          </div>
-          <div className="mode-toggle">
-            {(['chat', 'rag', 'agent'] as const).map(m => (
-              <button key={m} className={`mode-btn ${mode === m ? 'active' : ''}`}
-                onClick={() => setMode(m)}>
-                {m === 'chat' ? 'Чат' : m === 'rag' ? '+RAG' : 'Агент'}
-              </button>
-            ))}
-          </div>
-          {(mode === 'rag' || mode === 'agent') && (
-            <select className="rag-select" value={selectedCollection}
-              onChange={(e) => setSelectedCollection(e.target.value)}>
-              <option value="">— выберите коллекцию —</option>
-              {collections.map(c => (
-                <option key={c.name} value={c.name}>{c.name} ({c.count} док.)</option>
-              ))}
-            </select>
-          )}
-          <button className="settings-btn" onClick={() => setShowSettings(true)}>⚙</button>
-          <button className="settings-btn" onClick={handleNewChat}>✨</button>
-        </div>
-      </div>
-
-      {/* Messages */}
-      <div className="messages" ref={msgContainerRef} onScroll={handleScroll}>
-        {messages.length === 0 && !streaming && (
-          <div style={{ textAlign: 'center', color: 'var(--text2)', marginTop: 60, fontSize: 14 }}>
-            <div style={{ fontSize: 40, marginBottom: 12 }}>💬</div>
-            <div>Начните диалог с моделью</div>
-            {!providerOnline && (
-              <div style={{ marginTop: 8, color: 'var(--red)' }}>⚠ Провайдер недоступен</div>
-            )}
-            {mode === 'rag' && !selectedCollection && (
-              <div style={{ marginTop: 8, color: 'var(--accent)' }}>⚠ Выбран RAG без коллекции</div>
-            )}
-          </div>
-        )}
-
-        {messages.map((msg) => (
-          <MessageBubble key={msg.id} msg={msg} showThinking={showThinking}
-            onCopy={handleCopy}
-            onEdit={msg.role === 'user' ? () => handleEdit(msg.id) : undefined}
-            onRegenerate={msg.role === 'assistant' ? () => handleRegenerate(msg.id) : undefined}
-          />
-        ))}
-
-        {streaming && (
-          <div className="message assistant">
-            <div className="msg-bubble">
-              {streamThinking && showThinking && (
-                <details className="thinking-block">
-                  <summary>🤔 Размышления модели</summary>
-                  <div className="thinking-content">{cleanThinking(streamThinking)}</div>
-                </details>
-              )}
-              {streamText ? (
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>{stripHtml(streamText)}</ReactMarkdown>
-              ) : (
-                <div className="typing"><span /><span /><span /></div>
-              )}
+    <div className="app">
+      <Sidebar
+        open={sidebarOpen}
+        onToggle={() => setSidebarOpen(!sidebarOpen)}
+        page={page}
+        onPageChange={onPageChange}
+        chats={chats}
+        activeChatId={activeChatId}
+        onSelectChat={selectChat}
+        onNewChat={handleNewChat}
+        onDeleteChat={deleteChat}
+      />
+      <main className="main">
+        <div className="chat-page">
+          {/* Header */}
+          <div className="chat-header">
+            <button className="menu-btn" onClick={() => setSidebarOpen(!sidebarOpen)}>☰</button>
+            <div className="chat-status">
+              <span className={`status-dot ${providerOnline ? 'online' : 'offline'}`} />
+              <span className="status-text">{providerLabel}{chatModel ? ` · ${chatModel}` : ''}</span>
             </div>
-          </div>
-        )}
-
-        {sources.length > 0 && (
-          <div className="message assistant" style={{ paddingTop: 0 }}>
-            <div className="sources-block">
-              <details>
-                <summary>📄 Источники ({sources.length})</summary>
-                {sources.map((s, i) => (
-                  <div key={i} className="source-item"><strong>{s.filename}</strong> — {s.content}</div>
+            <div className="chat-header-controls">
+              <div className="provider-select-group">
+                <select className="header-select" value={providerName}
+                  onChange={(e) => handleSwitchProvider(e.target.value)}>
+                  {PROVIDERS.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
+                </select>
+                {chatModels.length > 0 && (
+                  <select className="header-select" value={chatModel}
+                    onChange={(e) => handleSelectModel(e.target.value)}>
+                    {chatModels.map(m => <option key={m} value={m}>{m}</option>)}
+                  </select>
+                )}
+              </div>
+              <div className="mode-toggle">
+                {(['chat', 'rag', 'agent'] as const).map(m => (
+                  <button key={m} className={`mode-btn ${mode === m ? 'active' : ''}`}
+                    onClick={() => setMode(m)}>
+                    {m === 'chat' ? 'Чат' : m === 'rag' ? '+RAG' : 'Агент'}
+                  </button>
                 ))}
-              </details>
+              </div>
+              {(mode === 'rag' || mode === 'agent') && (
+                <select className="rag-select" value={selectedCollection}
+                  onChange={(e) => setSelectedCollection(e.target.value)}>
+                  <option value="">— выберите коллекцию —</option>
+                  {collections.map(c => (
+                    <option key={c.name} value={c.name}>{c.name} ({c.count} док.)</option>
+                  ))}
+                </select>
+              )}
+              <button className="settings-btn" onClick={() => setShowSettings(true)}>⚙</button>
+              <button className="settings-btn" onClick={handleNewChat}>✨</button>
             </div>
           </div>
-        )}
 
-        {error && (
-          <div className="message assistant">
-            <div className="msg-bubble" style={{ background: 'var(--red)', color: '#fff' }}>❌ {error}</div>
-            <div className="msg-actions" style={{ opacity: 1 }}>
-              <button className="msg-action-btn" onClick={handleRetry} title="Повторить">🔄 Повторить</button>
-            </div>
-          </div>
-        )}
-
-        <div ref={msgEndRef} />
-      </div>
-
-      {/* Context bar */}
-      {contextUsed > 0 && (
-        <div className="context-bar">
-          <div className="context-bar-fill"
-            style={{ width: `${Math.min(100, (contextUsed / settings.contextLength) * 100)}%` }} />
-          <span className="context-bar-text">
-            Контекст: {contextUsed.toLocaleString()} / {settings.contextLength.toLocaleString()} токенов ({((contextUsed / settings.contextLength) * 100).toFixed(1)}%)
-          </span>
-        </div>
-      )}
-
-      {/* Input */}
-      <div className="input-area">
-        <div className="input-row">
-          <button className={`think-toggle ${showThinking ? 'active' : ''}`}
-            onClick={() => setShowThinking(!showThinking)}
-            title={showThinking ? 'Скрыть размышления' : 'Показать размышления'}>🧠</button>
-          <div className="input-wrap">
-            {editingId && (
-              <div className="edit-indicator">
-                ✏ Редактирование
-                <button className="edit-cancel-btn" onClick={() => { setEditingId(null); setInput('') }}>Отмена</button>
+          {/* Messages */}
+          <div className="messages" ref={msgContainerRef} onScroll={handleScroll}>
+            {messages.length === 0 && !streaming && (
+              <div style={{ textAlign: 'center', color: 'var(--text2)', marginTop: 60, fontSize: 14 }}>
+                <div style={{ fontSize: 40, marginBottom: 12 }}>💬</div>
+                <div>Начните диалог с моделью</div>
+                {!providerOnline && (
+                  <div style={{ marginTop: 8, color: 'var(--red)' }}>⚠ Провайдер недоступен</div>
+                )}
+                {mode === 'rag' && !selectedCollection && (
+                  <div style={{ marginTop: 8, color: 'var(--accent)' }}>⚠ Выбран RAG без коллекции</div>
+                )}
               </div>
             )}
-            <textarea ref={inputRef} value={input} onChange={(e) => setInput(e.target.value)}
-              onKeyDown={handleKeyDown}
-              placeholder={editingId ? 'Редактирование...' : 'Введите сообщение...'}
-              rows={1} disabled={loading} style={loading ? { opacity: 0.5 } : {}} />
+
+            {messages.map((msg) => (
+              <MessageBubble key={msg.id} msg={msg} showThinking={showThinking}
+                onCopy={handleCopy}
+                onEdit={msg.role === 'user' ? () => handleEdit(msg.id) : undefined}
+                onRegenerate={msg.role === 'assistant' ? () => handleRegenerate(msg.id) : undefined}
+              />
+            ))}
+
+            {streaming && (
+              <div className="message assistant">
+                <div className="msg-bubble">
+                  {streamThinking && showThinking && (
+                    <details className="thinking-block">
+                      <summary>🤔 Размышления модели</summary>
+                      <div className="thinking-content">{cleanThinking(streamThinking)}</div>
+                    </details>
+                  )}
+                  {streamText ? (
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{stripHtml(streamText)}</ReactMarkdown>
+                  ) : (
+                    <div className="typing"><span /><span /><span /></div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {sources.length > 0 && (
+              <div className="message assistant" style={{ paddingTop: 0 }}>
+                <div className="sources-block">
+                  <details>
+                    <summary>📄 Источники ({sources.length})</summary>
+                    {sources.map((s, i) => (
+                      <div key={i} className="source-item"><strong>{s.filename}</strong> — {s.content}</div>
+                    ))}
+                  </details>
+                </div>
+              </div>
+            )}
+
+            {error && (
+              <div className="message assistant">
+                <div className="msg-bubble" style={{ background: 'var(--red)', color: '#fff' }}>❌ {error}</div>
+                <div className="msg-actions" style={{ opacity: 1 }}>
+                  <button className="msg-action-btn" onClick={handleRetry} title="Повторить">🔄 Повторить</button>
+                </div>
+              </div>
+            )}
+
+            <div ref={msgEndRef} />
           </div>
-          {streaming ? (
-            <button className="stop-btn" onClick={handleStop}>⏹</button>
-          ) : (
-            <button className="send-btn" onClick={handleSend} disabled={loading || !input.trim()}>➤</button>
+
+          {/* Context bar */}
+          {contextUsed > 0 && (
+            <div className="context-bar">
+              <div className="context-bar-fill"
+                style={{ width: `${Math.min(100, (contextUsed / settings.contextLength) * 100)}%` }} />
+              <span className="context-bar-text">
+                Контекст: {contextUsed.toLocaleString()} / {settings.contextLength.toLocaleString()} токенов ({((contextUsed / settings.contextLength) * 100).toFixed(1)}%)
+              </span>
+            </div>
+          )}
+
+          {/* Input */}
+          <div className="input-area">
+            <div className="input-row">
+              <button className={`think-toggle ${showThinking ? 'active' : ''}`}
+                onClick={() => setShowThinking(!showThinking)}
+                title={showThinking ? 'Скрыть размышления' : 'Показать размышления'}>🧠</button>
+              <div className="input-wrap">
+                {editingId && (
+                  <div className="edit-indicator">
+                    ✏ Редактирование
+                    <button className="edit-cancel-btn" onClick={cancelEdit}>Отмена</button>
+                  </div>
+                )}
+                <textarea ref={inputRef} value={input} onChange={(e) => setInput(e.target.value)}
+                  onKeyDown={handleKeyDown}
+                  placeholder={editingId ? 'Редактирование...' : 'Введите сообщение...'}
+                  rows={1} disabled={loading} style={loading ? { opacity: 0.5 } : {}} />
+              </div>
+              {streaming ? (
+                <button className="stop-btn" onClick={handleStop}>⏹</button>
+              ) : (
+                <button className="send-btn" onClick={handleSend} disabled={loading || !input.trim()}>➤</button>
+              )}
+            </div>
+          </div>
+
+          {showSettings && (
+            <SettingsPanel settings={settings} onChange={setSettings} onClose={() => setShowSettings(false)} />
           )}
         </div>
-      </div>
-
-      {showSettings && (
-        <SettingsPanel settings={settings} onChange={setSettings} onClose={() => setShowSettings(false)} />
-      )}
+      </main>
     </div>
   )
 }

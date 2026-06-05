@@ -10,6 +10,7 @@ import type {
   Source,
   SSEData,
   Metrics,
+  ChatSummary,
   TokenCallback,
   ThinkingCallback,
   DoneCallback,
@@ -252,4 +253,47 @@ export async function deleteWorkspace(id: number): Promise<{ status: string }> {
     method: 'DELETE',
   })
   return r.json()
+}
+
+export async function getChats(): Promise<ChatSummary[]> {
+  const r = await fetch(`${API}/chats`)
+  const data = await r.json()
+  return data.chats || []
+}
+
+export async function createChat(title?: string): Promise<{ id: number; title: string }> {
+  const r = await fetch(`${API}/chats`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title: title || 'Новый чат' }),
+  })
+  return r.json()
+}
+
+export async function deleteChat(id: number): Promise<void> {
+  await fetch(`${API}/chats/${id}`, { method: 'DELETE' })
+}
+
+export async function renameChat(id: number, title: string): Promise<void> {
+  await fetch(`${API}/chats/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title }),
+  })
+}
+
+export async function getChatMessages(id: number): Promise<any[]> {
+  const r = await fetch(`${API}/chats/${id}/messages`)
+  const data = await r.json()
+  return data.messages || []
+}
+
+export async function saveChatMessages(id: number, messages: any[]): Promise<any[]> {
+  const r = await fetch(`${API}/chats/${id}/messages`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ messages }),
+  })
+  const data = await r.json()
+  return data.messages || []
 }

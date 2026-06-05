@@ -112,6 +112,14 @@ export interface ChatSettings {
   contextLength: number
 }
 
+export interface ChatSummary {
+  id: number
+  title: string
+  message_count: number
+  created_at: string
+  updated_at: string
+}
+
 export type TokenCallback = (token: string) => void
 export type ThinkingCallback = (thinking: string, isEnd: boolean) => void
 export type DoneCallback = (full: string, thinking: string, sources: Source[], metrics: Metrics | null) => void

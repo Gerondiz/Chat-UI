@@ -10,21 +10,31 @@ export default function App() {
 
   return (
     <div className="app">
-      <Sidebar
-        open={sidebarOpen}
-        onToggle={() => setSidebarOpen(!sidebarOpen)}
-        page={page}
-        onPageChange={setPage}
-      />
-      <main className="main">
-        {page === 'chat' && (
-          <ChatPage
-            sidebarOpen={sidebarOpen}
-            setSidebarOpen={setSidebarOpen}
+      {page === 'chat' ? (
+        <ChatPage
+          sidebarOpen={sidebarOpen}
+          setSidebarOpen={setSidebarOpen}
+          page={page}
+          onPageChange={setPage}
+        />
+      ) : (
+        <>
+          <Sidebar
+            open={sidebarOpen}
+            onToggle={() => setSidebarOpen(!sidebarOpen)}
+            page={page}
+            onPageChange={setPage}
+            chats={[]}
+            activeChatId={null}
+            onSelectChat={() => {}}
+            onNewChat={() => {}}
+            onDeleteChat={() => {}}
           />
-        )}
-        {page === 'collections' && <CollectionsPage />}
-      </main>
+          <main className="main">
+            <CollectionsPage />
+          </main>
+        </>
+      )}
     </div>
   )
 }
