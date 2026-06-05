@@ -39,6 +39,7 @@ class OpenAIProvider(BaseProvider):
             rc = choice.get("reasoning_content") or ""
             if rc:
                 content = f"<think{rc} response"
+        raw_calls = choice.get("tool_calls")
         tool_calls = None
         if raw_calls:
             tool_calls = []

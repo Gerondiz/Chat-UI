@@ -11,7 +11,8 @@ import type {
   Collection,
 } from '../types'
 
-const cleanThinking = (text: string): string => text.replace(/>/g, '')
+const cleanThinking = (text: string): string =>
+  text.replace(/^<think\s*/i, '').replace(/>/g, '').trim()
 const stripHtml = (text: string): string => text.replace(/<[^>]+>/g, '')
 
 const DEFAULT_SETTINGS: ChatSettings = {

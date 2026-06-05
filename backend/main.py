@@ -207,22 +207,6 @@ def _extract_thinking(resp: str) -> tuple[str, str]:
         thinking = resp[t_start:t_end]
         content = resp[:t_start] + resp[t_end:]
         return content, thinking
-    if "<think" in resp:
-        t_start = resp.index("<think")
-        # No closing tag - strip the <think... prefix
-        # Find a reasonable boundary (newline after think block, or end of sentence)
-        rest = resp[t_start + 6:]  # after "<think"
-        # Try to find a natural boundary
-        for boundary in ["\n\n", ". ", ".\n"]:
-            idx = rest.find(boundary)
-            if idx > 20:  # at least some thinking content
-                thinking = resp[t_start:t_start + 6 + idx + len(boundary)]
-                content = resp[:t_start] + resp[t_start + 6 + idx + len(boundary):]
-                return content, thinking
-        # Fallback: put everything after <think into thinking
-        thinking = resp[t_start:]
-        content = resp[:t_start]
-        return content, thinking
     return resp, ""
 
 
