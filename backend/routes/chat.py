@@ -45,12 +45,12 @@ async def chat(req: ChatRequest, request: Request):
 
         if req.mode == "agent":
             if not mcp_host.is_ready:
-                resp = await state.provider.chat(
+                result = await state.provider.chat(
                     messages, system_prompt="",
                     temperature=req.temperature, max_tokens=req.max_tokens,
                     top_p=req.top_p, reasoning=req.reasoning,
                 )
-                content, thinking = extract_thinking(resp)
+                content, thinking = extract_thinking(result.content)
                 return {"role": "assistant", "content": content, "thinking": thinking, "sources": []}
 
             content, sources, msgs = await run_agent_loop(
@@ -62,11 +62,12 @@ async def chat(req: ChatRequest, request: Request):
                 reasoning=req.reasoning,
             )
             if content is None and msgs:
-                content = await state.provider.chat(
+                result = await state.provider.chat(
                     msgs, system_prompt="",
                     temperature=req.temperature, max_tokens=req.max_tokens,
                     top_p=req.top_p, reasoning=req.reasoning,
                 )
+                content = result.content
             final_content, thinking_full = extract_thinking(content or "")
             if not final_content.strip() and thinking_full:
                 final_content = thinking_full.replace("<think>", "").replace("</think>", "")
@@ -82,7 +83,7 @@ async def chat(req: ChatRequest, request: Request):
             last_q = req.messages[-1].content if req.messages else ""
             messages.append({"role": "user", "content": context + "\n\nВопрос: " + last_q})
 
-        resp = await state.provider.chat(
+        result = await state.provider.chat(
             messages,
             system_prompt="",
             temperature=req.temperature,
@@ -90,7 +91,7 @@ async def chat(req: ChatRequest, request: Request):
             top_p=req.top_p,
             reasoning=req.reasoning,
         )
-        content, thinking = extract_thinking(resp)
+        content, thinking = extract_thinking(result.content)
         return {
             "role": "assistant",
             "content": content,

@@ -16,33 +16,6 @@ class OpenAIProvider(BaseProvider):
     async def chat(
         self, messages, system_prompt="",
         temperature=0.7, max_tokens=4096, top_p=0.9,
-        reasoning=True,
-    ) -> str:
-        msgs = list(messages)
-        if system_prompt:
-            msgs.insert(0, {"role": "system", "content": system_prompt})
-        body = {
-            "model": self.chat_model,
-            "messages": msgs,
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-            "top_p": top_p,
-            "stream": False,
-        }
-        resp = await self._client.post(f"{self.base_url}/chat/completions", json=body)
-        resp.raise_for_status()
-        data = resp.json()
-        await resp.aclose()
-        choice = data["choices"][0]["message"]
-        content = choice.get("content") or ""
-        rc = choice.get("reasoning_content") or ""
-        if rc:
-            content = f"<think>{rc}</think>{content}"
-        return content
-
-    async def chat_with_tools(
-        self, messages, system_prompt="",
-        temperature=0.7, max_tokens=4096, top_p=0.9,
         reasoning=True, tools=None,
     ) -> ChatResult:
         msgs = list(messages)

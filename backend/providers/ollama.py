@@ -63,26 +63,6 @@ class OllamaProvider(BaseProvider):
     async def chat(
         self, messages, system_prompt="",
         temperature=0.7, max_tokens=4096, top_p=0.9,
-        reasoning=True,
-    ) -> str:
-        body = {
-            "model": self.chat_model,
-            "messages": messages,
-            "stream": True,
-            "options": {
-                "temperature": temperature,
-                "top_p": top_p,
-                "num_predict": max_tokens,
-            },
-        }
-        if system_prompt:
-            body["system"] = system_prompt
-        data = await self._post("/api/chat", body)
-        return data.get("message", {}).get("content", "")
-
-    async def chat_with_tools(
-        self, messages, system_prompt="",
-        temperature=0.7, max_tokens=4096, top_p=0.9,
         reasoning=True, tools=None,
     ) -> ChatResult:
         body = {

@@ -22,7 +22,8 @@ class BaseProvider(ABC):
         self, messages: list[dict], system_prompt: str = "",
         temperature: float = 0.7, max_tokens: int = 4096, top_p: float = 0.9,
         reasoning: bool = True,
-    ) -> str:
+        tools: list[dict] | None = None,
+    ) -> ChatResult:
         ...
 
     async def chat_with_tools(
@@ -31,10 +32,9 @@ class BaseProvider(ABC):
         reasoning: bool = True,
         tools: list[dict] | None = None,
     ) -> ChatResult:
-        content = await self.chat(
-            messages, system_prompt, temperature, max_tokens, top_p, reasoning,
+        return await self.chat(
+            messages, system_prompt, temperature, max_tokens, top_p, reasoning, tools=tools,
         )
-        return ChatResult(content=content)
 
     def format_assistant_message(
         self, content: str | None, tool_calls: list[ToolCall] | None

@@ -15,10 +15,6 @@ async def run_agent_loop(
     reasoning: bool,
     max_iterations: int = 5,
 ) -> tuple[str | None, list[dict], list[dict]]:
-    """Run the agent tool-calling loop. Returns (final_content, all_sources, final_messages).
-    If loop ended with content, final_content is set and final_messages is empty.
-    If loop ended with tool_call, final_content is None and final_messages should be streamed.
-    """
     all_sources: list[dict] = []
     current_messages = list(messages)
     tool_schemas = mcp_host.get_tool_schemas()
@@ -40,12 +36,15 @@ async def run_agent_loop(
             logger.info("chat_with_tools exception type: %s, args: %s, repr: %r",
                         type(exc).__name__, exc.args, exc)
             try:
-                content = await provider.chat(
-                    current_messages, system_prompt="",
-                    temperature=temperature, max_tokens=max_tokens,
-                    top_p=top_p, reasoning=reasoning,
+                result = await provider.chat(
+                    current_messages,
+                    system_prompt="",
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    top_p=top_p,
+                    reasoning=reasoning,
                 )
-                return content, all_sources, []
+                return result.content, all_sources, []
             except Exception as fallback_exc:
                 logger.error("fallback chat also failed (%s)", fallback_exc)
                 logger.info("fallback exception type: %s, args: %s, repr: %r",
