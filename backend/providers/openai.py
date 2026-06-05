@@ -76,9 +76,8 @@ class OpenAIProvider(BaseProvider):
 
     def format_tool_messages(self, tool_calls, results):
         return [
-            {"role": "tool", "content": results[i], "tool_call_id": tc.id}
+            {"role": "tool", "content": results[i], "tool_call_id": tc.id or f"call_{i}"}
             for i, tc in enumerate(tool_calls)
-            if tc.id
         ]
 
     async def chat_stream(

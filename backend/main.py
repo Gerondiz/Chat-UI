@@ -190,8 +190,11 @@ async def _run_agent_loop(
     top_p: float,
     reasoning: bool,
     max_iterations: int = 5,
-) -> tuple[str, list[dict]]:
-    """Run the agent tool-calling loop. Returns (final_content, all_sources)."""
+) -> tuple[str | None, list[dict], list[dict]]:
+    """Run the agent tool-calling loop. Returns (final_content, all_sources, final_messages).
+    If loop ended with content, final_content is set and final_messages is empty.
+    If loop ended with tool_call, final_content is None and final_messages should be streamed.
+    """
     all_sources: list[dict] = []
     current_messages = list(messages)
     tool_schemas = mcp_host.get_tool_schemas()
@@ -217,25 +220,27 @@ async def _run_agent_loop(
                 top_p=top_p,
                 reasoning=reasoning,
             )
-            return content, all_sources
+            return content, all_sources, []
 
         # Append assistant response to conversation
-        assistant_msg: dict = {"role": "assistant", "content": result.content}
+        assistant_msg: dict = {"role": "assistant", "content": None if result.tool_calls else result.content}
         if result.tool_calls:
             assistant_msg["tool_calls"] = [
                 {
+                    "id": tc.id if tc.id else f"call_{i}",
+                    "type": "function",
                     "function": {
                         "name": tc.name,
                         "arguments": json.dumps(tc.arguments) if isinstance(tc.arguments, dict) else tc.arguments,
-                    }
+                    },
                 }
-                for tc in result.tool_calls
+                for i, tc in enumerate(result.tool_calls)
             ]
         current_messages.append(assistant_msg)
 
         if not result.tool_calls:
             # No tools called — final response
-            return result.content, all_sources
+            return result.content, all_sources, []
 
         # Execute tool calls
         text_results: list[str] = []
@@ -256,16 +261,8 @@ async def _run_agent_loop(
         tool_messages = current_provider.format_tool_messages(result.tool_calls, text_results)
         current_messages.extend(tool_messages)
 
-    # Max iterations reached — force direct response
-    final = await current_provider.chat(
-        current_messages,
-        system_prompt="",
-        temperature=temperature,
-        max_tokens=max_tokens,
-        top_p=top_p,
-        reasoning=reasoning,
-    )
-    return final, all_sources
+    # Max iterations reached — return messages for streaming
+    return None, all_sources, current_messages
 
 
 @app.post("/api/chat")
@@ -298,17 +295,23 @@ async def chat(req: ChatRequest):
                 content, thinking = _extract_thinking(resp)
                 return {"role": "assistant", "content": content, "thinking": thinking, "sources": []}
 
-            content, sources = await _run_agent_loop(
+            content, sources, msgs = await _run_agent_loop(
                 messages,
                 temperature=req.temperature,
                 max_tokens=req.max_tokens,
                 top_p=req.top_p,
                 reasoning=req.reasoning,
             )
+            if content is None and msgs:
+                content = await current_provider.chat(
+                    msgs, system_prompt="",
+                    temperature=req.temperature, max_tokens=req.max_tokens,
+                    top_p=req.top_p, reasoning=req.reasoning,
+                )
             thinking_full = ""
-            final_content = content
-            if "<think" in content and "</think>" in content:
-                final_content, thinking_full = _extract_thinking(content)
+            final_content = content or ""
+            if "<think" in final_content and "</think>" in final_content:
+                final_content, thinking_full = _extract_thinking(final_content)
             return {
                 "role": "assistant",
                 "content": final_content,
@@ -373,8 +376,8 @@ async def chat_stream(req: ChatRequest):
                     yield f"data: {json.dumps(fallback_done)}\n\n"
                 return StreamingResponse(pass_through(), media_type="text/event-stream")
 
-            # Agent mode: run tool loop, then emit final content directly
-            final_content, sources = await _run_agent_loop(
+            # Agent mode: run tool loop, then stream final response
+            agent_content, sources, agent_msgs = await _run_agent_loop(
                 messages,
                 temperature=req.temperature,
                 max_tokens=req.max_tokens,
@@ -382,32 +385,67 @@ async def chat_stream(req: ChatRequest):
                 reasoning=req.reasoning,
             )
 
-            async def generate_agent():
-                import re
-                content_only = final_content
-                thinking_full = ""
-                if "<think" in final_content and "</think>" in final_content:
-                    thinking_parts = re.findall(r"<think[\s\S]*?</think>", final_content)
-                    thinking_full = "".join(thinking_parts)
-                    content_only = re.sub(r"<think[\s\S]*?</think>", "", final_content)
+            if agent_content is not None:
+                # Response without tool calls — emit directly
+                async def emit_agent():
+                    import re
+                    content_only = agent_content
+                    thinking_full = ""
+                    if "<think" in agent_content and "</think>" in agent_content:
+                        thinking_parts = re.findall(r"<think[\s\S]*?</think>", agent_content)
+                        thinking_full = "".join(thinking_parts)
+                        content_only = re.sub(r"<think[\s\S]*?</think>", "", agent_content)
 
-                words = content_only.split(" ")
-                for i, w in enumerate(words):
-                    token = w + (" " if i < len(words) - 1 else "")
+                    words = content_only.split(" ")
+                    for i, w in enumerate(words):
+                        token = w + (" " if i < len(words) - 1 else "")
+                        yield f"data: {json.dumps({'token': token, 'done': False})}\n\n"
+
+                    done_data = {
+                        "token": "", "done": True, "full": content_only,
+                        "thinking": thinking_full, "sources": sources,
+                        "metrics": {
+                            "time_sec": 0, "tokens": len(words),
+                            "output_time_sec": 0, "output_tokens": len(words),
+                            "tokens_per_sec": 0,
+                        },
+                    }
+                    yield f"data: {json.dumps(done_data)}\n\n"
+
+                return StreamingResponse(emit_agent(), media_type="text/event-stream")
+
+            # tool loop ended — stream final response from provider
+            async def stream_agent():
+                import time
+                start_time = time.time()
+                full = ""
+                token_count = 0
+                async for token in current_provider.chat_stream(
+                    agent_msgs, system_prompt="",
+                    temperature=req.temperature, max_tokens=req.max_tokens,
+                    top_p=req.top_p, reasoning=req.reasoning,
+                ):
+                    if not token:
+                        continue
+                    full += token
+                    token_count += 1
                     yield f"data: {json.dumps({'token': token, 'done': False})}\n\n"
 
+                elapsed = time.time() - start_time
+                content_only, thinking_full = _extract_thinking(full)
+                tps = round(token_count / elapsed, 1) if elapsed > 0 else 0
                 done_data = {
                     "token": "", "done": True, "full": content_only,
                     "thinking": thinking_full, "sources": sources,
                     "metrics": {
-                        "time_sec": 0, "tokens": len(words),
-                        "output_time_sec": 0, "output_tokens": len(words),
-                        "tokens_per_sec": 0,
+                        "time_sec": round(elapsed, 1), "tokens": token_count,
+                        "output_time_sec": round(elapsed, 1), "output_tokens": token_count,
+                        "tokens_per_sec": tps,
                     },
                 }
                 yield f"data: {json.dumps(done_data)}\n\n"
 
-            return StreamingResponse(generate_agent(), media_type="text/event-stream")
+            return StreamingResponse(stream_agent(), media_type="text/event-stream")
 
         if docs:
             context = (
