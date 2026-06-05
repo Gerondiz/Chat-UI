@@ -1,127 +1,189 @@
-# Найденные проблемы и их исправления
+# Актуальные проблемы
 
 ## CRITICAL
 
-### 1. Ollama: tool_calls не захватываются из NDJSON-потока
+### 1. Thinking-теги: конфликт форматов между провайдерами, бэкендом и фронтендом
 
-**Файл:** `backend/providers/ollama.py:23-48`
+**Файлы:** `backend/providers/ollama.py`, `backend/providers/openai.py`, `backend/providers/lmstudio.py`, `backend/main.py`, `frontend/src/api.ts`
 
-**Проблема:** `chat_with_tools` шлёт `"stream": True` и парсит NDJSON через `_post()`. При `done: true` код копирует все поля из `parsed` в `result`, **кроме** `message`. Но именно в `parsed["message"]` приходит `tool_calls` от Ollama. В результате `tool_calls` теряются — агентный режим никогда не получает вызовы инструментов.
+**Проблема:** Используются 3 разных формата тегов, которые несовместимы:
 
-```python
-# Было: пропускает message целиком
-for k, v in parsed.items():
-    if k != "message":
-        result[k] = v
-```
+| Формат | Кто отдаёт | Бэкенд `generate()` ищет | Фронтенд `chatStream()` ищет |
+|--------|-----------|--------------------------|------------------------------|
+| `<think{text} response` (без закрывающего тега) | ollama `_post()`, openai `chat_stream()`/`chat()`, lmstudio `chat_stream()` | `re.findall(r"<think[\s\S]*?</think>")` — **НЕ НАХОДИТ** | `<think` / `</think>` — **НЕ НАХОДИТ** |
+| `<think>...</think>` | Никто не генерирует (только парсится) | Бэкенд ищет (regex) | Фронтенд ищет (state machine) |
+| Без тегов | ollama `chat_stream()` (нет вывода thinking) | — | — |
 
-**Исправление:** Добавлено копирование `tool_calls` из `parsed["message"]`.
+**Следствие:** Thinking никогда не отделяется от контента в стриминговом режиме. Текст размышлений попадает в ответ модели как обычный текст. На фронтенде не показывается блок "Размышления модели".
+
+**Пример:** OpenAI стримит `<think reasoning text response`, бэкенд ищет `</think>` → `thinking_full` пуст → фронтенд показывает всё как контент.
 
 ---
 
-### 2. Теги thinking/reasoning не совпадают — контент размышлений утекает в ответ
+### 2. Ollama `chat_stream()` не читает поле `thinking` из чанков
 
-**Файлы:** `backend/providers/openai.py:41,71-72,137`, `backend/providers/lmstudio.py:84`
+**Файл:** `backend/providers/ollama.py:166`
 
-**Проблема:** Провайдеры вставляют тег `" thinking{reasoning} response"` (без `<`), а код извлечения и на клиенте (`api.ts:157`), и на сервере (`main.py:177, 314, 505`) ищет `"<think"`. Из-за этого тег никогда не находится, и **весь reasoning-контент попадает в видимый ответ как обычный текст**.
+**Проблема:** В стриминговом режиме Ollama присылает поле `thinking` в каждом чанке NDJSON, но `chat_stream()` читает только `message.content`:
 
 ```python
-# Было (без <):
-yield f" thinking{reasoning} response"
+delta = chunk.get("message", {}).get("content", "")  # thinking игнорируется
+yield delta
 ```
 
-**Исправление:** Добавлен `<` к открывающему тегу: `f"<think{reasoning} response"`.
+При этом не-стриминговый метод `_post()` (строка 41-43) thinking захватывает:
+
+```python
+t = chunk.get("thinking", "") or parsed.get("thinking", "") or ""
+if t:
+    thinking_parts.append(t)
+```
+
+**Следствие:** В стриминговом режиме Ollama thinking полностью отсутствует. В не-стриминговом — работает (через `_post()`).
+
+---
+
+### 3. Метрики токенов: неконсистентная структура `__LMSTATS__`
+
+**Файлы:** `backend/providers/ollama.py:168-180`, `backend/providers/openai.py:91-96`, `backend/providers/lmstudio.py:90-95`
+
+**Проблема:** Каждый провайдер отдаёт разный набор полей в `__LMSTATS__`:
+
+| Поле | Ollama | OpenAI | LMStudio |
+|------|--------|--------|----------|
+| `input_tokens` | `prompt_eval_count` | `prompt_tokens` | ? |
+| `output_tokens` | `eval_count` | `completion_tokens` | ? |
+| `tokens_per_second` | вычисляется из `eval_duration` | отсутствует | ? |
+| `time_to_first_token_seconds` | из `total_duration` | отсутствует | ? |
+
+В `generate()` (строка 551-559) эти поля смешиваются:
+- `reasoning_tokens` берётся как `reasoning_output_tokens` — есть только у OpenAI (и называется иначе)
+- `lm_tokens_per_sec` — есть только у Ollama
+- `ttft` — есть только у Ollama
+
+Фронтенд использует `lm_tokens_per_sec` как флаг "показать расширенную статистику" — для OpenAI/LMStudio детали не отображаются, даже если провайдер прислал бы данные.
+
+---
+
+### 4. Agent mode: опечатки и путаница форматов
+
+**Файл:** `backend/main.py:421, 461-462`
+
+**Проблема:**
+
+**`emit_agent()` (строка 421):**
+```python
+content_only = thinking_full.replace(" thinking", "").replace(" response", "")
+```
+Опечатка: `" thinking"` вместо `"<think"`. Ничего не заменяет.
+
+**`stream_agent()` (строка 461):**
+```python
+content_only = thinking_full.replace("<think>", "").replace("</think>", "")
+```
+Заменяет формат 2 (`<think>...</think>`), но `_extract_thinking()` (строка 459) использует формат 1 (`<think... response`). Несоответствие форматов.
 
 ---
 
 ## HIGH
 
-### 3. MCP host: ошибки старта молча проглатываются
+### 5. Фронтенд парсит thinking дублирующе (и неверно)
 
-**Файл:** `backend/mcp_host.py:32-56`, `backend/main.py:98`
+**Файл:** `frontend/src/api.ts:119-181`
 
-**Проблема:** `mcp_host.start()` запускается через `asyncio.create_task()`. Если MCP-сервер не запущен (или падает), исключение внутри задачи бесшумно исчезает — `_ready` никогда не выставляется. Таймаут 5 секунд срабатывает, и **агентный режим навсегда падает на fallback chat**, без сообщения пользователю.
+**Проблема:** Фронтенд самостоятельно парсит `<think>`/`</think>` во время стриминга (state machine), хотя бэкенд в `done`-событии уже присылает готовые `full` и `thinking` поля.
 
-**Исправление:** Добавлен try/except в `start()` — при ошибке `_ready` выставляется (чтобы не ждать таймаута), ошибка логируется.
+Парсинг на фронтенде:
+- Ищет `<think` → `</think>` (формат 2)
+- Провайдеры отдают `<think... response` (формат 1)
+- Фронтенд входит в режим thinking на `<think` и никогда не выходит (нет `</think>`)
 
----
-
-### 4. Фронтенд хардкодит URL `http://localhost:8000/api`
-
-**Файл:** `frontend/src/api.ts:20`
-
-**Проблема:** Vite proxy настроен (`/api/*` → `localhost:8000`), но не используется — фронтенд идёт напрямую. При деплое на другой порт/хост всё ломается (требуется CORS и фиксированный порт). Vite proxy также даёт 120-секундный таймаут, который теряется.
-
-```javascript
-const API = 'http://localhost:8000/api'
-```
-
-**Исправление:** Использовать относительный путь `/api`.
+**Следствие:** Весь последующий стриминг уходит в `onThinking`, реальный контент не отображается до `done`.
 
 ---
 
-### 5. AbortError при остановке генерации показывает ложную ошибку
+### 6. Отсутствует `.env` — провайдеры работают с дефолтами
 
-**Файл:** `frontend/src/api.ts:187-189`
+**Файл:** `backend/config.py`
 
-**Проблема:** При нажатии "Стоп" вызывается `controller.abort()`, промис fetch падает с `AbortError`, и вызывается `onError` с сообщением об ошибке. Пользователь видит красное уведомление, хотя это штатная операция.
+**Проблема:** `load_dotenv()` загружает `backend/.env`, которого нет. Есть только `.env.example`. Бэкенд работает с дефолтными значениями `os.getenv()`, которые могут не соответствовать реальной инфраструктуре.
 
-**Исправление:** Добавлена проверка `err.name !== 'AbortError'` перед вызовом `onError`.
+---
+
+### 7. Ollama `chat()` (не-стриминг) всегда использует stream внутри
+
+**Файл:** `backend/providers/ollama.py:72`
+
+**Проблема:** В `chat()` тело запроса содержит `"stream": True`, и парсинг идёт через NDJSON в `_post()`. Это избыточно для не-стримингового вызова — можно было бы отправить `stream: False` и получить обычный JSON.
+
+---
+
+### 8. Agent mode: метрики считаются по словам, не по токенам
+
+**Файл:** `backend/main.py:424, 433`
+
+**Проблема:** В `emit_agent()` и `stream_agent()` метрики `tokens` и `output_tokens` считаются как `len(words)` или `token_count` (количество чанков от провайдера), а не реальные токены. Нет `input_tokens`, `lm_tokens_per_sec` и т.д.
+
+---
+
+### 9. ChatPage.tsx: `cleanThinking` для русских моделей
+
+**Файл:** `frontend/src/pages/ChatPage.tsx:429, 500`
+
+**Проблема:** `cleanThinking()` использует `text.replace(/^<think\s*/i, '')` — предполагает латинский `<think`. Для моделей, которые могут использовать кириллические теги (или их отсутствие), очистка может не сработать.
 
 ---
 
 ## MEDIUM
 
-### 6. RAG-контекст формируется по-разному в chat vs chat/stream
+### 10. Нет проверки работающего ChromaDB при старте
 
-**Файл:** `backend/main.py:328, 465`
+**Файл:** `backend/main.py`
 
-**Проблема:** 
-- `/api/chat` (non-streaming) — заменяет последнее сообщение пользователя на `контекст + вопрос` (теряется оригинальный запрос)
-- `/api/chat/stream` — *добавляет* новое сообщение с контекстом
-
-Это несогласованное поведение.
-
-**Исправление:** Оба пути теперь добавляют контекст как отдельное сообщение.
+**Проблема:** При старте нет проверки, доступна ли ChromaDB. Ошибки RAG проявляются только при первом поиске. Пользователь видит ошибку в рантайме, а не при запуске.
 
 ---
 
-### 7. LMStudioProvider: нестандартный API и неверный base_url в конфиге
+### 11. Состояние гонки: `current_provider` и `current_config`
 
-**Файл:** `backend/providers/lmstudio.py`, `backend/main.py:82-88`
+**Файл:** `backend/main.py:39-41`
 
-**Проблема:**
-- `_default_config("lmstudio")` использует `config.OPENAI_BASE_URL` (OpenAI-совместимый порт 1234), хотя LMStudio в "нативном" режиме слушает на порту 1234 с другим API
-- LMStudioProvider использует кастомный `/api/v1/chat` вместо `/v1/chat/completions`, с ручной сериализацией `"Role: content"`
-
-**Исправление:** Выставлен `LMSTUDIO_BASE_URL` в конфиг, модель по умолчанию — `gemma-4-e4b`.
+**Проблема:** `current_provider` и `current_config` — глобальные переменные. Несмотря на `_provider_lock` для endpoint-ов провайдера, запросы на `/api/chat` и `/api/chat/stream` не используют этот лок, и могут прочитать провайдера в момент переключения.
 
 ---
 
-### 8. Ollama: утечка HTTP-соединения при ошибке
+### 12. LMStudio: нестандартный API `/api/v1/chat`
 
-**Файл:** `backend/providers/ollama.py:16`
+**Файл:** `backend/providers/lmstudio.py`
 
-**Проблема:** `resp.raise_for_status()` выбрасывает исключение, и `resp.aclose()` не вызывается (утечка HTTP-соединения).
+**Проблема:** LMStudio Native API использует нестандартный формат:
+- Не `messages`/OpenAI format, а `"input": "System: ...\nUser: ...\nAssistant: ..."`
+- Не `max_tokens`, а `max_output_tokens`
+- Не `stream: True` в теле, а SSE с кастомными событиями (`reasoning.delta`, `message.delta`, `chat.end`)
+- API endpoint — `/api/v1/chat`, а не `/v1/chat/completions`
 
-**Исправление:** Добавлен try/finally для гарантированного закрытия.
-
----
-
-### 9. Provider switch: гонка при параллельных запросах
-
-**Файл:** `backend/main.py:118-131`
-
-**Проблема:** Если два запроса на переключение/обновление провайдера придут одновременно, `current_provider` может оказаться в несогласованном состоянии (гонка через `global`).
-
-**Исправление:** Добавлен `asyncio.Lock()` для provider-операций.
+При переключении с OpenAI-совместимого на Native API у пользователей с LMStudio часто ломается подключение, если указан неверный `base_url`.
 
 ---
 
-### 10. MCP_SERVER_CMD: путь может не совпадать
+### 13. Non-streaming chat в agent mode не разделяет thinking
 
-**Файл:** `backend/mcp_host.py:19`
+**Файл:** `backend/main.py:330-343`
 
-**Проблема:** `MCP_SERVER_CMD` по умолчанию `"python3 mcp_server/server.py"`. Если проект запущен не из корня репозитория (где лежит папка `mcp_server/`), или используется другой интерпретатор, MCP-сервер не найдётся.
+**Проблема:** В agent mode при `content is None and msgs` вызывается `chat()`, и результат проходит `_extract_thinking()`. Но если после `_run_agent_loop` контент уже есть (строка 338), thinking извлекается повторно — и может быть уже пуст, если был извлечён внутри `_run_agent_loop`.
 
-**Статус:** Оставлено как документированное ограничение — `start.sh` и `run_and_test.py` запускают из корня.
+---
+
+### 14. Ошибки стриминга не доходят до фронтенда
+
+**Файл:** `frontend/src/api.ts:112-114`
+
+**Проблема:** Если стриминг прерывается середине (обрыв соединения, таймаут прокси), фронтенд получает `done: true` от ReadableStream, но событие `done` так и не приходит. `loading` остаётся `true`, интерфейс застывает. Нет таймаута на стриминг.
+
+---
+
+### 15. `mcp_host.is_ready` не сбрасывается при ошибке
+
+**Файл:** `backend/mcp_host.py`
+
+**Проблема:** Если MCP-сервер упал после того, как стал ready, `is_ready` остаётся `True`. Агентный режим продолжает пытаться вызывать `_run_agent_loop`, который падает с исключением, и падает на fallback chat без уведомления.

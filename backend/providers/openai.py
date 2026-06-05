@@ -35,10 +35,38 @@ class OpenAIProvider(BaseProvider):
         await resp.aclose()
         choice = data["choices"][0]["message"]
         content = choice.get("content") or ""
-        if not content:
-            rc = choice.get("reasoning_content") or ""
-            if rc:
-                content = f"<think{rc} response"
+        rc = choice.get("reasoning_content") or ""
+        if rc:
+            content = f"<think>{rc}</think>{content}"
+        return content
+
+    async def chat_with_tools(
+        self, messages, system_prompt="",
+        temperature=0.7, max_tokens=4096, top_p=0.9,
+        reasoning=True, tools=None,
+    ) -> ChatResult:
+        msgs = list(messages)
+        if system_prompt:
+            msgs.insert(0, {"role": "system", "content": system_prompt})
+        body = {
+            "model": self.chat_model,
+            "messages": msgs,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "top_p": top_p,
+            "stream": False,
+        }
+        if tools:
+            body["tools"] = tools
+        resp = await self._client.post(f"{self.base_url}/chat/completions", json=body)
+        resp.raise_for_status()
+        data = resp.json()
+        await resp.aclose()
+        choice = data["choices"][0]["message"]
+        content = choice.get("content") or ""
+        rc = choice.get("reasoning_content") or ""
+        if rc:
+            content = f"<think>{rc}</think>{content}"
         raw_calls = choice.get("tool_calls")
         tool_calls = None
         if raw_calls:
@@ -78,20 +106,28 @@ class OpenAIProvider(BaseProvider):
             "stream_options": {"include_usage": True},
         }
         async with self._client.stream("POST", f"{self.base_url}/chat/completions", json=body) as resp:
+            reasoning_buf = []
+            reasoning_tokens_count = 0
             async for line in resp.aiter_lines():
                 if not line.strip():
                     continue
                 if line.startswith("data: "):
                     payload = line[6:]
                     if payload.strip() == "[DONE]":
+                        if reasoning_buf:
+                            yield f"<think>{''.join(reasoning_buf)}</think>"
                         break
                     try:
                         chunk = json.loads(payload)
                         usage = chunk.get("usage")
                         if usage:
+                            if reasoning_buf:
+                                yield f"<think>{''.join(reasoning_buf)}</think>"
+                                reasoning_buf = []
                             stats = {
                                 "input_tokens": usage.get("prompt_tokens", 0),
                                 "output_tokens": usage.get("completion_tokens", 0),
+                                "reasoning_output_tokens": reasoning_tokens_count,
                             }
                             yield f"__LMSTATS__{json.dumps(stats)}__LMSTATS__"
                             continue
@@ -104,8 +140,12 @@ class OpenAIProvider(BaseProvider):
                         if not reasoning:
                             reasoning = delta.get("reasoning", "") or ""
                         if reasoning:
-                            yield f"<think{reasoning} response"
-                        if content:
+                            reasoning_buf.append(reasoning)
+                            reasoning_tokens_count += 1
+                        elif content:
+                            if reasoning_buf:
+                                yield f"<think>{''.join(reasoning_buf)}</think>"
+                                reasoning_buf = []
                             yield content
                     except json.JSONDecodeError:
                         continue

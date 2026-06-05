@@ -52,11 +52,10 @@ class OllamaProvider(BaseProvider):
                     if not result.get("message", {}).get("content"):
                         if isinstance(msg, dict) and msg.get("content"):
                             result["message"] = dict(msg)
-            # Prepend thinking as <think...response if not empty
             if thinking_parts:
                 thinking_text = "".join(thinking_parts)
                 existing = result.get("message", {}).get("content", "") or ""
-                result.setdefault("message", {})["content"] = f"<think{thinking_text} response{existing}"
+                result.setdefault("message", {})["content"] = f"<think>{thinking_text}</think>{existing}"
             return result
         finally:
             await resp.aclose()
@@ -157,17 +156,33 @@ class OllamaProvider(BaseProvider):
             body["system"] = system_prompt
         url = f"{self.base_url}/api/chat"
         async with self._client.stream("POST", url, json=body) as resp:
+            thinking_buf = []
+            thinking_tokens = 0
             async for line in resp.aiter_lines():
                 if not line.strip():
                     continue
                 try:
                     chunk = json.loads(line)
-                    delta = chunk.get("message", {}).get("content", "")
-                    yield delta
+                    msg = chunk.get("message", {}) if isinstance(chunk.get("message"), dict) else {}
+                    t = chunk.get("thinking", "") or msg.get("thinking", "") or ""
+                    delta = msg.get("content", "") or ""
+
+                    if t:
+                        thinking_buf.append(t)
+                        thinking_tokens += 1
+                    elif delta:
+                        if thinking_buf:
+                            yield f"<think>{''.join(thinking_buf)}</think>"
+                            thinking_buf = []
+                        yield delta
+
                     if chunk.get("done"):
+                        if thinking_buf:
+                            yield f"<think>{''.join(thinking_buf)}</think>"
                         stats = {
                             "input_tokens": chunk.get("prompt_eval_count", 0),
                             "output_tokens": chunk.get("eval_count", 0),
+                            "reasoning_output_tokens": thinking_tokens,
                         }
                         eval_dur = chunk.get("eval_duration", 0)
                         if eval_dur:

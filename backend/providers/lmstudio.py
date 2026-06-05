@@ -1,14 +1,11 @@
 import json
 import httpx
-from .base import BaseProvider
+from .base import BaseProvider, ChatResult, ToolCall
 
 
 class LMStudioProvider(BaseProvider):
     def __init__(self, base_url: str, chat_model: str, embedding_model: str, api_key: str = ""):
-        base = base_url.rstrip("/")
-        if base.endswith("/v1"):
-            base = base[:-3]
-        self.base_url = base
+        self.base_url = base_url.rstrip("/")
         self.chat_model = chat_model
         self.embedding_model = embedding_model
         headers = {"Content-Type": "application/json"}
@@ -16,106 +13,165 @@ class LMStudioProvider(BaseProvider):
             headers["Authorization"] = f"Bearer {api_key}"
         self._client = httpx.AsyncClient(timeout=300, headers=headers)
 
-    async def _post(self, path: str, data: dict):
-        url = f"{self.base_url}{path}"
-        resp = await self._client.post(url, json=data)
+    async def chat(
+        self, messages, system_prompt="",
+        temperature=0.7, max_tokens=4096, top_p=0.9,
+        reasoning=True,
+    ) -> str:
+        msgs = list(messages)
+        if system_prompt:
+            msgs.insert(0, {"role": "system", "content": system_prompt})
+        body = {
+            "model": self.chat_model,
+            "messages": msgs,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "top_p": top_p,
+            "stream": False,
+        }
+        resp = await self._client.post(f"{self.base_url}/v1/chat/completions", json=body)
         resp.raise_for_status()
         data = resp.json()
         await resp.aclose()
-        return data
+        choice = data["choices"][0]["message"]
+        content = choice.get("content") or ""
+        rc = choice.get("reasoning_content") or ""
+        if rc:
+            content = f"<think>{rc}</think>{content}"
+        return content
 
-    def _build_body(self, messages, system_prompt="",
-                    temperature=0.7, max_tokens=4096, top_p=0.9,
-                    stream=False, reasoning=True):
-        parts = []
+    def format_tool_messages(self, tool_calls, results):
+        return [
+            {"role": "tool", "content": results[i], "tool_call_id": tc.id or f"call_{i}"}
+            for i, tc in enumerate(tool_calls)
+        ]
+
+    async def chat_stream(
+        self, messages, system_prompt="",
+        temperature=0.7, max_tokens=4096, top_p=0.9,
+        reasoning=True,
+    ):
+        msgs = list(messages)
         if system_prompt:
-            parts.append(f"System: {system_prompt}")
-        for msg in messages:
-            role = msg["role"].capitalize()
-            parts.append(f"{role}: {msg['content']}")
-        input_text = "\n".join(parts) if parts else ""
+            msgs.insert(0, {"role": "system", "content": system_prompt})
         body = {
             "model": self.chat_model,
-            "input": input_text,
+            "messages": msgs,
             "temperature": temperature,
-            "max_output_tokens": max_tokens,
+            "max_tokens": max_tokens,
             "top_p": top_p,
-            "stream": stream,
+            "stream": True,
+            "stream_options": {"include_usage": True},
         }
+        async with self._client.stream("POST", f"{self.base_url}/v1/chat/completions", json=body) as resp:
+            reasoning_buf = []
+            reasoning_tokens_count = 0
+            async for line in resp.aiter_lines():
+                if not line.strip():
+                    continue
+                if line.startswith("data: "):
+                    payload = line[6:]
+                    if payload.strip() == "[DONE]":
+                        if reasoning_buf:
+                            yield f"<think>{''.join(reasoning_buf)}</think>"
+                        break
+                    try:
+                        chunk = json.loads(payload)
+                        usage = chunk.get("usage")
+                        if usage:
+                            if reasoning_buf:
+                                yield f"<think>{''.join(reasoning_buf)}</think>"
+                                reasoning_buf = []
+                            stats = {
+                                "input_tokens": usage.get("prompt_tokens", 0),
+                                "output_tokens": usage.get("completion_tokens", 0),
+                                "reasoning_output_tokens": reasoning_tokens_count,
+                            }
+                            yield f"__LMSTATS__{json.dumps(stats)}__LMSTATS__"
+                            continue
+                        choices = chunk.get("choices", [])
+                        if not choices:
+                            continue
+                        delta = choices[0].get("delta", {})
+                        content = delta.get("content", "") or ""
+                        reasoning = delta.get("reasoning_content", "") or ""
+                        if not reasoning:
+                            reasoning = delta.get("reasoning", "") or ""
+                        if reasoning:
+                            reasoning_buf.append(reasoning)
+                            reasoning_tokens_count += 1
+                        elif content:
+                            if reasoning_buf:
+                                yield f"<think>{''.join(reasoning_buf)}</think>"
+                                reasoning_buf = []
+                            yield content
+                    except json.JSONDecodeError:
+                        continue
+
+    async def chat_with_tools(
+        self, messages, system_prompt="",
+        temperature=0.7, max_tokens=4096, top_p=0.9,
+        reasoning=True, tools=None,
+    ) -> ChatResult:
+        msgs = list(messages)
         if system_prompt:
-            body["system_prompt"] = system_prompt
-        if not reasoning:
-            body["reasoning"] = "off"
-        return body
+            msgs.insert(0, {"role": "system", "content": system_prompt})
+        body = {
+            "model": self.chat_model,
+            "messages": msgs,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "top_p": top_p,
+            "stream": False,
+        }
+        if tools:
+            body["tools"] = tools
+        resp = await self._client.post(f"{self.base_url}/v1/chat/completions", json=body)
+        resp.raise_for_status()
+        data = resp.json()
+        await resp.aclose()
+        choice = data["choices"][0]["message"]
+        content = choice.get("content") or ""
+        rc = choice.get("reasoning_content") or ""
+        if rc:
+            content = f"<think>{rc}</think>{content}"
+        raw_calls = choice.get("tool_calls")
+        tool_calls = None
+        if raw_calls:
+            tool_calls = []
+            for tc in raw_calls:
+                func = tc.get("function", {})
+                tool_calls.append(
+                    ToolCall(
+                        id=tc.get("id", ""),
+                        name=func.get("name", ""),
+                        arguments=json.loads(func.get("arguments", "{}")),
+                    )
+                )
+        return ChatResult(content=content, tool_calls=tool_calls or None)
 
-    async def chat(self, messages, system_prompt="",
-                   temperature=0.7, max_tokens=4096, top_p=0.9,
-                   reasoning=True) -> str:
-        body = self._build_body(messages, system_prompt, temperature, max_tokens, top_p, reasoning=reasoning)
-        data = await self._post("/api/v1/chat", body)
-        full = ""
-        for item in data.get("output", []):
-            if item.get("type") == "message":
-                full += item.get("content", "")
-        return full
-
-    async def chat_stream(self, messages, system_prompt="",
-                          temperature=0.7, max_tokens=4096, top_p=0.9,
-                          reasoning=True):
-        body = self._build_body(messages, system_prompt, temperature, max_tokens, top_p, stream=True, reasoning=reasoning)
-        url = f"{self.base_url}/api/v1/chat"
-        async with self._client.stream("POST", url, json=body) as resp:
-            buf = ""
-            current_event = ""
-            async for chunk in resp.aiter_bytes():
-                buf += chunk.decode("utf-8", errors="replace")
-                while "\n" in buf:
-                    line, buf = buf.split("\n", 1)
-                    line = line.strip()
-                    if line.startswith("event: "):
-                        current_event = line[7:].strip()
-                    elif line.startswith("data: "):
-                        payload = line[6:].strip()
-                        try:
-                            if current_event == "reasoning.delta":
-                                d = json.loads(payload)
-                                content = d.get("content", "")
-                                if content:
-                                    yield f"<think{content} response"
-                            elif current_event == "message.delta":
-                                d = json.loads(payload)
-                                content = d.get("content", "")
-                                if content:
-                                    yield content
-                            elif current_event == "chat.end":
-                                d = json.loads(payload)
-                                result = d.get("result", {})
-                                stats = result.get("stats", {})
-                                if stats:
-                                    yield f"__LMSTATS__{json.dumps(stats)}__LMSTATS__"
-                        except json.JSONDecodeError:
-                            pass
+    def format_tool_messages(self, tool_calls, results):
+        return [
+            {"role": "tool", "content": results[i], "tool_call_id": tc.id or f"call_{i}"}
+            for i, tc in enumerate(tool_calls)
+        ]
 
     async def embeddings(self, texts):
         body = {"model": self.embedding_model, "input": texts}
-        resp = await self._client.post(f"{self.base_url}/api/v1/embeddings", json=body)
+        resp = await self._client.post(f"{self.base_url}/v1/embeddings", json=body)
         resp.raise_for_status()
         data = resp.json()
         await resp.aclose()
-        return [e["embedding"] for e in data.get("data", [])]
+        return [e["embedding"] for e in data["data"]]
 
     async def list_models(self) -> tuple[list[str], list[str]]:
         chat_models = []
         embedding_models = []
         try:
-            resp = await self._client.get(f"{self.base_url}/api/v1/models")
+            resp = await self._client.get(f"{self.base_url}/v1/models")
             resp.raise_for_status()
-            data = resp.json()
-            models = data.get("models") or data.get("data", [])
-            for m in models:
-                name = m.get("id") or m.get("key", "")
-                if not name:
-                    continue
+            for m in resp.json().get("data", []):
+                name = m["id"]
                 chat_models.append(name)
                 if "embed" in name.lower():
                     embedding_models.append(name)
@@ -128,11 +184,8 @@ class LMStudioProvider(BaseProvider):
 
     async def check(self) -> bool:
         try:
-            resp = await self._client.get(f"{self.base_url}/api/v1/models")
+            resp = await self._client.get(f"{self.base_url}/v1/models")
             ok = resp.status_code == 200
-            if ok:
-                data = resp.json()
-                ok = "error" not in data
             await resp.aclose()
             return ok
         except Exception:

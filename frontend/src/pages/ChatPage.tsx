@@ -12,7 +12,7 @@ import type {
 } from '../types'
 
 const cleanThinking = (text: string): string =>
-  text.replace(/^<think\s*/i, '').replace(/>/g, '').trim()
+  text.replace(/^<think>/i, '').replace(/<\/think>$/i, '').trim()
 const stripHtml = (text: string): string => text.replace(/<[^>]+>/g, '')
 
 const DEFAULT_SETTINGS: ChatSettings = {
@@ -426,7 +426,7 @@ export default function ChatPage({ sidebarOpen, setSidebarOpen }: ChatPageProps)
                 <details className="thinking-block">
                   <summary>🤔 Размышления модели</summary>
                   <div className="thinking-content">
-                    {cleanThinking(msg.thinking.replace(/<\/?think>/g, ''))}
+                    {cleanThinking(msg.thinking)}
                   </div>
                 </details>
               )}
