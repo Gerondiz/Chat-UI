@@ -60,7 +60,19 @@
 
 ---
 
-### ✓ 8. Agent mode: метрики считаются по словам, не по токенам
+### ✓ 5. Фронтенд парсит thinking дублирующе
+
+**Статус:** Исправлено
+
+**Файл:** `frontend/src/api.ts`
+
+**Что было:** Фронтенд парсил `<think>`/`</think>` вручную с dead-кодом (`raw`, `isFirstContent`).
+
+**Что сделано:** Удалены мёртвые переменные (`raw`, `isFirstContent`), упрощена логика state machine. Фронтенд по-прежнему парсит маркеры для прогрессивного отображения думания во время стриминга, но код чище.
+
+---
+
+### ✓ 6. Agent mode: метрики считаются по словам, не по токенам
 
 **Статус:** Исправлено
 
@@ -72,7 +84,7 @@
 
 ---
 
-### ✓ 13. Non-streaming chat в agent mode не разделяет thinking
+### ✓ 7. Non-streaming chat в agent mode не разделяет thinking
 
 **Статус:** Исправлено
 
@@ -89,24 +101,33 @@ if not content_only.strip() and thinking_full:
 
 ---
 
-## HIGH
+### ✓ 8. Состояние гонки: `current_provider` и `current_config`
 
-### 5. Фронтенд парсит thinking дублирующе (и неверно)
+**Статус:** Исправлено
 
-**Файл:** `frontend/src/api.ts:119-181`
+**Файл:** `backend/main.py` → `backend/state.py`, `backend/routes/`
 
-**Проблема:** Фронтенд самостоятельно парсит `<think>`/`</think>` во время стриминга (state machine), хотя бэкенд в `done`-событии уже присылает готовые `full` и `thinking` поля.
+**Что было:** Глобальные переменные `current_provider` и `current_config` на уровне модуля. Потенциальная гонка между переключением провайдера и запросами чата.
 
-Парсинг на фронтенде:
-- Ищет `<think` → `</think>` (формат 2)
-- Провайдеры отдают `<think... response` (формат 1)
-- Фронтенд входит в режим thinking на `<think` и никогда не выходит (нет `</think>`)
-
-**Частично исправлено:** Ollama провайдер теперь оборачивает думание в `<think>`/`</think>` маркеры, поэтому фронтенд корректно входит и выходит из thinking-режима. Однако парсинг на фронтенде дублирует серверный — можно было бы полагаться только на `full`/`thinking` из `done`-события.
+**Что сделано:** Состояние вынесено в `AppState` (`state.py`), хранится в `app.state.state`. Provider routes используют async lock. Chat routes не блокируются на каждый токен — показывают last-known-good провайдера (атомарная замена через `state.set()`).
 
 ---
 
-### 6. Отсутствует `.env` — провайдеры работают с дефолтами
+### ✓ 9. `mcp_host.is_ready` не сбрасывается при ошибке
+
+**Статус:** Исправлено
+
+**Файл:** `backend/mcp_host.py`
+
+**Что было:** При ошибке старта `start()` вызывал `self._ready.set()`, из-за чего `is_ready` возвращал `True` даже при падении MCP.
+
+**Что сделано:** Убран вызов `self._ready.set()` в обработчике исключения `start()`. При ошибке `_ready` остаётся невзведённым → `wait_ready(20)` таймаутит → `is_ready = False` → агентный режим корректно переходит на fallback.
+
+---
+
+## HIGH
+
+### 10. Отсутствует `.env` — провайдеры работают с дефолтами
 
 **Файл:** `backend/config.py`
 
@@ -114,7 +135,7 @@ if not content_only.strip() and thinking_full:
 
 ---
 
-### 7. Ollama `chat()` (не-стриминг) всегда использует stream внутри
+### 11. Ollama `chat()` (не-стриминг) всегда использует stream внутри
 
 **Файл:** `backend/providers/ollama.py:72`
 
@@ -122,9 +143,9 @@ if not content_only.strip() and thinking_full:
 
 ---
 
-### 9. ChatPage.tsx: `cleanThinking` для русских моделей
+### 12. ChatPage.tsx: `cleanThinking` для русских моделей
 
-**Файл:** `frontend/src/pages/ChatPage.tsx:429, 500`
+**Файл:** `frontend/src/pages/ChatPage.tsx`
 
 **Проблема:** `cleanThinking()` использует `text.replace(/^<think\s*/i, '')` — предполагает латинский `<think`. Для моделей, которые могут использовать кириллические теги (или их отсутствие), очистка может не сработать.
 
@@ -132,7 +153,7 @@ if not content_only.strip() and thinking_full:
 
 ## MEDIUM
 
-### 10. Нет проверки работающего ChromaDB при старте
+### 13. Нет проверки работающего ChromaDB при старте
 
 **Файл:** `backend/main.py`
 
@@ -140,15 +161,7 @@ if not content_only.strip() and thinking_full:
 
 ---
 
-### 11. Состояние гонки: `current_provider` и `current_config`
-
-**Файл:** `backend/main.py:39-41`
-
-**Проблема:** `current_provider` и `current_config` — глобальные переменные. Несмотря на `_provider_lock` для endpoint-ов провайдера, запросы на `/api/chat` и `/api/chat/stream` не используют этот лок, и могут прочитать провайдера в момент переключения.
-
----
-
-### 12. LMStudio: нестандартный API `/api/v1/chat`
+### 14. LMStudio: нестандартный API `/api/v1/chat`
 
 **Файл:** `backend/providers/lmstudio.py`
 
@@ -162,16 +175,8 @@ if not content_only.strip() and thinking_full:
 
 ---
 
-### 14. Ошибки стриминга не доходят до фронтенда
+### 15. Ошибки стриминга не доходят до фронтенда
 
-**Файл:** `frontend/src/api.ts:112-114`
+**Файл:** `frontend/src/api.ts`
 
 **Проблема:** Если стриминг прерывается середине (обрыв соединения, таймаут прокси), фронтенд получает `done: true` от ReadableStream, но событие `done` так и не приходит. `loading` остаётся `true`, интерфейс застывает. Нет таймаута на стриминг.
-
----
-
-### 15. `mcp_host.is_ready` не сбрасывается при ошибке
-
-**Файл:** `backend/mcp_host.py`
-
-**Проблема:** Если MCP-сервер упал после того, как стал ready, `is_ready` остаётся `True`. Агентный режим продолжает пытаться вызывать `_run_agent_loop`, который падает с исключением, и падает на fallback chat без уведомления.

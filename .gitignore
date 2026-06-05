@@ -9,3 +9,5 @@ __pycache__/
 *.log
 .venv/
 .gitignore
+chatui.db
+.pytest_cache/

@@ -117,9 +117,7 @@ export function chatStream(
     const reader = r.body!.getReader()
     const decoder = new TextDecoder()
     let buffer = ''
-    let raw = ''
     let inThink = false
-    let isFirstContent = true
 
     while (true) {
       const { done, value } = await reader.read()
@@ -128,60 +126,58 @@ export function chatStream(
       const lines = buffer.split('\n')
       buffer = lines.pop() || ''
       for (const line of lines) {
-        if (line.startsWith('data: ')) {
-          try {
-            const data: SSEData = JSON.parse(line.slice(6))
-            if (data.done) {
-              onDone?.(data.full || '', data.thinking || '', data.sources || [], data.metrics || null)
-            } else {
-              const token = data.token || ''
-              if (!token) continue
-              raw += token
+        if (!line.startsWith('data: ')) continue
+        try {
+          const data: SSEData = JSON.parse(line.slice(6))
+          if (data.done) {
+            onDone?.(data.full || '', data.thinking || '', data.sources || [], data.metrics || null)
+            continue
+          }
+          const token = data.token || ''
+          if (!token) continue
 
-              let remaining = token
-              while (remaining.length > 0) {
-                if (inThink) {
-                  const endIdx = remaining.indexOf('</think>')
-                  if (endIdx >= 0) {
-                    const thinkText = remaining.slice(0, endIdx)
-                    if (thinkText) onThinking?.(thinkText, false)
-                    onThinking?.('', true)
-                    remaining = remaining.slice(endIdx + 8)
-                    inThink = false
-                    isFirstContent = true
-                  } else {
-                    onThinking?.(remaining, false)
-                    remaining = ''
-                  }
+          // Split token into segments at <think and </think boundaries
+          let remaining = token
+          while (remaining.length > 0) {
+            if (inThink) {
+              const end = remaining.indexOf('</think>')
+              if (end >= 0) {
+                const text = remaining.slice(0, end)
+                if (text) onThinking?.(text, false)
+                onThinking?.('', true)
+                remaining = remaining.slice(end + 8)
+                inThink = false
+              } else {
+                onThinking?.(remaining, false)
+                remaining = ''
+              }
+            } else {
+              const start = remaining.indexOf('<think')
+              if (start >= 0) {
+                const text = remaining.slice(0, start)
+                if (text) onToken?.(text)
+                remaining = remaining.slice(start)
+                inThink = true
+                // Check if </think> follows immediately in same token
+                const end = remaining.indexOf('</think>')
+                if (end >= 0) {
+                  const thinkText = remaining.slice(6, end)
+                  if (thinkText) onThinking?.(thinkText, false)
+                  onThinking?.('', true)
+                  remaining = remaining.slice(end + 8)
+                  inThink = false
                 } else {
-                  const startIdx = remaining.indexOf('<think')
-                  if (startIdx >= 0) {
-                    const before = remaining.slice(0, startIdx)
-                    if (before) onToken?.(before)
-                    remaining = remaining.slice(startIdx)
-                    inThink = true
-                    const endIdx = remaining.indexOf('</think>')
-                    if (endIdx >= 0) {
-                      const thinkText = remaining.slice(6, endIdx)
-                      if (thinkText) onThinking?.(thinkText, false)
-                      onThinking?.('', true)
-                      remaining = remaining.slice(endIdx + 8)
-                      inThink = false
-                      isFirstContent = true
-                    } else {
-                      const thinkText = remaining.slice(6)
-                      if (thinkText) onThinking?.(thinkText, false)
-                      remaining = ''
-                    }
-                  } else {
-                    onToken?.(remaining)
-                    remaining = ''
-                  }
+                  const thinkText = remaining.slice(6)
+                  if (thinkText) onThinking?.(thinkText, false)
+                  remaining = ''
                 }
+              } else {
+                onToken?.(remaining)
+                remaining = ''
               }
             }
-          } catch (_) { /* ignore parse errors */ }
-        }
+          }
+        } catch (_) { /* ignore parse errors */ }
       }
     }
   }).catch((err: Error) => {

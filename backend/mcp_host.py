@@ -56,7 +56,6 @@ class McpHost:
                     await asyncio.Event().wait()
         except Exception as exc:
             logger.error("MCP host failed to start: %s", exc)
-            self._ready.set()  # don't block wait_ready
 
     async def wait_ready(self, timeout: float = 15) -> bool:
         try:

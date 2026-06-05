@@ -1,50 +1,80 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useRef, useCallback } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import SettingsPanel from '../components/SettingsPanel'
 import * as api from '../api'
-import type {
-  Message,
-  ChatSettings,
-  Source,
-  Metrics,
-  Collection,
-} from '../types'
+import { useChat } from '../hooks/useChat'
+import { useProviders } from '../hooks/useProviders'
+import type { Source, Metrics } from '../types'
 
 const cleanThinking = (text: string): string =>
   text.replace(/^<think>/i, '').replace(/<\/think>$/i, '').trim()
 const stripHtml = (text: string): string => text.replace(/<[^>]+>/g, '')
 
-const DEFAULT_SETTINGS: ChatSettings = {
-  systemPrompt: '',
-  temperature: 0.7,
-  maxTokens: 4096,
-  topP: 0.9,
-  contextLength: 131072,
-}
-
-const PROVIDERS: { id: string; label: string }[] = [
+const PROVIDERS = [
   { id: 'ollama', label: 'Ollama' },
   { id: 'openai', label: 'LMStudio (OpenAI)' },
   { id: 'lmstudio', label: 'LMStudio (Native)' },
 ]
-
-function generateId(): string {
-  if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID()
-  return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
-}
 
 function formatTime(ts: number): string {
   const d = new Date(ts)
   const now = new Date()
   const pad = (n: number) => String(n).padStart(2, '0')
   const time = `${pad(d.getHours())}:${pad(d.getMinutes())}`
-  if (
-    d.getDate() === now.getDate() &&
-    d.getMonth() === now.getMonth() &&
-    d.getFullYear() === now.getFullYear()
-  ) return time
+  if (d.getDate() === now.getDate() && d.getMonth() === now.getMonth()) return time
   return `${pad(d.getDate())}.${pad(d.getMonth() + 1)} ${time}`
+}
+
+function MetricsBar({ metrics }: { metrics: Metrics | null }) {
+  if (!metrics) return null
+  return (
+    <div className="metrics-bar">
+      ⏱ {metrics.time_sec}с · {metrics.tokens} токенов
+      {typeof metrics.lm_tokens_per_sec === 'number' ? (
+        <>
+          {metrics.input_tokens ? <> · вход: {metrics.input_tokens}</> : null}
+          {metrics.reasoning_tokens ? <> · размышления: {metrics.reasoning_tokens}</> : null}
+          · {Number(metrics.lm_tokens_per_sec).toFixed(1)} ток/с
+          {metrics.ttft ? <> · TTFT: {Number(metrics.ttft).toFixed(2)}с</> : null}
+        </>
+      ) : (
+        metrics.output_tokens > 0 && (
+          <> · {metrics.output_tokens} токенов за {metrics.output_time_sec}с ({metrics.tokens_per_sec} ток/с)</>
+        )
+      )}
+    </div>
+  )
+}
+
+function MessageBubble({ msg, showThinking, onCopy, onEdit, onRegenerate }:
+  { msg: any; showThinking: boolean; onCopy: (c: string) => void; onEdit?: () => void; onRegenerate?: () => void }) {
+  return (
+    <div className={`message ${msg.role}`}>
+      <div className="msg-bubble">
+        {msg.role === 'assistant' && msg.thinking && showThinking && (
+          <details className="thinking-block">
+            <summary>🤔 Размышления модели</summary>
+            <div className="thinking-content">{cleanThinking(msg.thinking)}</div>
+          </details>
+        )}
+        <ReactMarkdown remarkPlugins={[remarkGfm]}>
+          {stripHtml(msg.content)}
+        </ReactMarkdown>
+        <MetricsBar metrics={msg.metrics} />
+        {msg.ts && <div className="msg-timestamp">{formatTime(msg.ts)}</div>}
+      </div>
+      <div className="msg-actions">
+        <button className="msg-action-btn" onClick={() => onCopy(msg.content)} title="Копировать">📋</button>
+        {msg.role === 'user' && onEdit && (
+          <button className="msg-action-btn" onClick={onEdit} title="Редактировать">✏</button>
+        )}
+        {msg.role === 'assistant' && onRegenerate && (
+          <button className="msg-action-btn" onClick={onRegenerate} title="Перегенерировать">🔄</button>
+        )}
+      </div>
+    </div>
+  )
 }
 
 interface ChatPageProps {
@@ -53,441 +83,119 @@ interface ChatPageProps {
 }
 
 export default function ChatPage({ sidebarOpen, setSidebarOpen }: ChatPageProps) {
-  const [messages, setMessages] = useState<Message[]>([])
-  const [input, setInput] = useState('')
-  const [loading, setLoading] = useState(false)
-  const [streaming, setStreaming] = useState(false)
-  const [streamText, setStreamText] = useState('')
-  const [streamThinking, setStreamThinking] = useState('')
-  const [showThinking, setShowThinking] = useState(true)
-  const [error, setError] = useState('')
-  const [mode, setMode] = useState('chat')
-  const [collections, setCollections] = useState<Collection[]>([])
-  const [selectedCollection, setSelectedCollection] = useState('')
-  const [showSettings, setShowSettings] = useState(false)
-  const [settings, setSettings] = useState<ChatSettings>(DEFAULT_SETTINGS)
-  const [sources, setSources] = useState<Source[]>([])
-  const [metrics, setMetrics] = useState<Metrics | null>(null)
-  const [editingId, setEditingId] = useState<string | null>(null)
-  const [contextUsed, setContextUsed] = useState(0)
+  const {
+    messages, input, setInput,
+    loading, streaming, streamText, streamThinking,
+    showThinking, setShowThinking,
+    error, sources, metrics, editingId, contextUsed,
+    mode, setMode, collections, setCollections,
+    selectedCollection, setSelectedCollection,
+    settings, setSettings,
+    handleSend, handleEdit, handleRegenerate, handleRetry, handleCopy,
+    handleStop, handleNewChat,
+  } = useChat()
 
-  const [providerName, setProviderName] = useState('ollama')
-  const [providerOnline, setProviderOnline] = useState(false)
-  const [chatModel, setChatModel] = useState('')
-  const [embeddingModel, setEmbeddingModel] = useState('')
-  const [chatModels, setChatModels] = useState<string[]>([])
-  const [embeddingModels, setEmbeddingModels] = useState<string[]>([])
+  const {
+    providerName, providerOnline, chatModel, chatModels,
+    loadProviderInfo, handleSwitchProvider, handleSelectModel,
+  } = useProviders()
 
   const msgEndRef = useRef<HTMLDivElement>(null)
   const msgContainerRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
-  const abortRef = useRef<(() => void) | null>(null)
+  const [showSettings, setShowSettings] = useState(false)
   const [userScrolledUp, setUserScrolledUp] = useState(false)
 
   const scrollToBottom = useCallback(() => {
-    if (!userScrolledUp) {
-      msgEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-    }
+    if (!userScrolledUp) msgEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [userScrolledUp])
 
   const handleScroll = useCallback(() => {
     const el = msgContainerRef.current
     if (!el) return
-    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 60
-    setUserScrolledUp(!atBottom)
+    setUserScrolledUp(el.scrollHeight - el.scrollTop - el.clientHeight > 60)
   }, [])
 
+  useEffect(() => { loadProviderInfo() }, [loadProviderInfo])
   useEffect(() => {
     api.getCollections().then((data) => {
       if (data.collections) setCollections(data.collections)
     }).catch(() => {})
-  }, [])
-
-  useEffect(() => {
-    scrollToBottom()
-  }, [messages, streamText, scrollToBottom])
-
-  useEffect(() => {
-    loadProviderInfo()
-  }, [])
-
-  const loadProviderInfo = async () => {
-    try {
-      const cfg = await api.getProvider()
-      setProviderName(cfg.name)
-      setChatModel(cfg.chat_model)
-      setEmbeddingModel(cfg.embedding_model)
-      const st = await api.getProviderStatus()
-      setProviderOnline(st.online)
-      setChatModels(st.chat_models || [])
-      setEmbeddingModels(st.embedding_models || [])
-    } catch (_) { /* ignore */ }
-  }
-
-  const handleSwitchProvider = async (name: string) => {
-    try {
-      setProviderOnline(false)
-      setChatModels([])
-      setChatModel('')
-      const cfg = await api.switchProvider(name)
-      setProviderName(cfg.name)
-      setChatModel(cfg.chat_model)
-      setEmbeddingModel(cfg.embedding_model)
-      const st = await api.getProviderStatus()
-      setProviderOnline(st.online)
-      setChatModels(st.chat_models || [])
-      setEmbeddingModels(st.embedding_models || [])
-    } catch (e: unknown) {
-      setError('Ошибка переключения провайдера: ' + (e instanceof Error ? e.message : String(e)))
-    }
-  }
-
-  const handleSelectModel = async (model: string) => {
-    setChatModel(model)
-    try {
-      const cfg = await api.getProvider()
-      cfg.chat_model = model
-      await api.updateProviderConfig(cfg)
-      const st = await api.getProviderStatus()
-      setProviderOnline(st.online)
-    } catch (_) { /* ignore */ }
-  }
-
-  const handleStop = () => {
-    if (abortRef.current) {
-      abortRef.current()
-      abortRef.current = null
-    }
-    setStreaming(false)
-    setLoading(false)
-  }
-
-  const doSend = async (baseMessages: Message[], text: string) => {
-    if (!text || loading) return
-    setInput('')
-    setError('')
-    setMetrics(null)
-    setEditingId(null)
-
-    const userMsg: Message = { role: 'user', content: text, id: generateId(), ts: Date.now() }
-    const updated = [...baseMessages, userMsg]
-    setMessages(updated)
-
-    if (abortRef.current) abortRef.current()
-    setLoading(true)
-    setStreaming(true)
-    setStreamText('')
-    setStreamThinking('')
-    setSources([])
-    setUserScrolledUp(false)
-
-    abortRef.current = api.chatStream(
-      updated,
-      {
-        settings,
-        mode,
-        collection: selectedCollection,
-        reasoning: showThinking,
-      },
-      (token: string) => {
-        setStreamText((prev) => prev + token)
-      },
-      (thinking: string, isEnd: boolean) => {
-        if (isEnd) {
-          setStreamThinking((prev) => prev)
-        } else if (thinking) {
-          setStreamThinking((prev) => prev + thinking)
-        }
-      },
-      (full: string, thinking: string, srcs: Source[], met: Metrics | null) => {
-        setStreaming(false)
-        setLoading(false)
-        setStreamText('')
-        setStreamThinking('')
-        setMessages((prev) => {
-          const newMsg: Message = {
-            role: 'assistant',
-            content: full,
-            thinking: thinking || '',
-            metrics: met || null,
-            id: generateId(),
-            ts: Date.now(),
-          }
-          return [...prev, newMsg]
-        })
-        setSources(srcs || [])
-        setMetrics(met || null)
-        if (met) {
-          const inp = met.input_tokens || 0
-          if (inp > 0) setContextUsed(inp + (met.tokens || 0))
-        }
-      },
-      (err: string) => {
-        setStreaming(false)
-        setLoading(false)
-        setError(err)
-      },
-    )
-  }
-
-  const handleSend = async () => {
-    const text = input.trim()
-    if (!text || loading) return
-
-    if (editingId) {
-      const editIdx = messages.findIndex(m => m.id === editingId)
-      if (editIdx !== -1) {
-        const baseMessages = messages.slice(0, editIdx)
-        await doSend(baseMessages, text)
-        return
-      }
-      setEditingId(null)
-    }
-    await doSend(messages, text)
-  }
-
-  const handleEdit = (msgId: string) => {
-    if (loading) return
-    const msg = messages.find(m => m.id === msgId) as import('../types').UserMessage | undefined
-    if (!msg) return
-    setEditingId(msgId)
-    setInput(msg.content)
-    inputRef.current?.focus()
-  }
-
-  const handleRegenerate = async (msgId: string) => {
-    if (loading) return
-    if (abortRef.current) abortRef.current()
-    setEditingId(null)
-
-    const msgIdx = messages.findIndex(m => m.id === msgId)
-    if (msgIdx === -1) return
-    const baseMessages = messages.slice(0, msgIdx)
-    setMessages(baseMessages)
-
-    const lastUser = [...baseMessages].reverse().find(m => m.role === 'user') as import('../types').UserMessage | undefined
-    if (!lastUser) return
-    await doSend(baseMessages, lastUser.content)
-  }
-
-  const handleRetry = async () => {
-    if (loading) return
-    setError('')
-    if (messages.length === 0) return
-    const lastMsg = messages[messages.length - 1]
-    if (lastMsg.role !== 'user') return
-    const baseMessages = messages.slice(0, -1)
-    await doSend(baseMessages, lastMsg.content)
-  }
-
-  const handleCopy = async (content: string) => {
-    try {
-      await navigator.clipboard.writeText(content)
-    } catch { /* ignore */ }
-  }
+  }, [setCollections])
+  useEffect(() => { scrollToBottom() }, [messages, streamText, scrollToBottom])
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Escape' && editingId) {
-      setEditingId(null)
-      setInput('')
-      return
-    }
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault()
-      handleSend()
-    }
-  }
-
-  const handleNewChat = () => {
-    if (abortRef.current) abortRef.current()
-    setMessages([])
-    setStreamText('')
-    setStreamThinking('')
-    setStreaming(false)
-    setLoading(false)
-    setError('')
-    setSources([])
-    setMetrics(null)
-    setEditingId(null)
-    setInput('')
-    setContextUsed(0)
+    if (e.key === 'Escape' && editingId) { setEditingId(null); setInput(''); return }
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend() }
   }
 
   const providerLabel = PROVIDERS.find(p => p.id === providerName)?.label || providerName
 
   return (
     <div className="chat-page">
+      {/* Header */}
       <div className="chat-header">
-        <button className="menu-btn" onClick={() => setSidebarOpen(!sidebarOpen)}>
-          ☰
-        </button>
+        <button className="menu-btn" onClick={() => setSidebarOpen(!sidebarOpen)}>☰</button>
         <div className="chat-status">
           <span className={`status-dot ${providerOnline ? 'online' : 'offline'}`} />
-          <span className="status-text">
-            {providerLabel}
-            {chatModel ? ` · ${chatModel}` : ''}
-          </span>
+          <span className="status-text">{providerLabel}{chatModel ? ` · ${chatModel}` : ''}</span>
         </div>
         <div className="chat-header-controls">
           <div className="provider-select-group">
-            <select
-              className="header-select"
-              value={providerName}
-              onChange={(e) => handleSwitchProvider(e.target.value)}
-            >
-              {PROVIDERS.map(p => (
-                <option key={p.id} value={p.id}>{p.label}</option>
-              ))}
+            <select className="header-select" value={providerName}
+              onChange={(e) => handleSwitchProvider(e.target.value)}>
+              {PROVIDERS.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
             </select>
             {chatModels.length > 0 && (
-              <select
-                className="header-select"
-                value={chatModel}
-                onChange={(e) => handleSelectModel(e.target.value)}
-              >
-                {chatModels.map(m => (
-                  <option key={m} value={m}>{m}</option>
-                ))}
+              <select className="header-select" value={chatModel}
+                onChange={(e) => handleSelectModel(e.target.value)}>
+                {chatModels.map(m => <option key={m} value={m}>{m}</option>)}
               </select>
             )}
           </div>
           <div className="mode-toggle">
-            <button
-              className={`mode-btn ${mode === 'chat' ? 'active' : ''}`}
-              onClick={() => setMode('chat')}
-            >
-              Чат
-            </button>
-            <button
-              className={`mode-btn ${mode === 'rag' ? 'active' : ''}`}
-              onClick={() => setMode('rag')}
-            >
-              +RAG
-            </button>
-            <button
-              className={`mode-btn ${mode === 'agent' ? 'active' : ''}`}
-              onClick={() => setMode('agent')}
-            >
-              Агент
-            </button>
+            {(['chat', 'rag', 'agent'] as const).map(m => (
+              <button key={m} className={`mode-btn ${mode === m ? 'active' : ''}`}
+                onClick={() => setMode(m)}>
+                {m === 'chat' ? 'Чат' : m === 'rag' ? '+RAG' : 'Агент'}
+              </button>
+            ))}
           </div>
           {(mode === 'rag' || mode === 'agent') && (
-            <select
-              className="rag-select"
-              value={selectedCollection}
-              onChange={(e) => setSelectedCollection(e.target.value)}
-            >
+            <select className="rag-select" value={selectedCollection}
+              onChange={(e) => setSelectedCollection(e.target.value)}>
               <option value="">— выберите коллекцию —</option>
-              {collections.map((c) => (
-                <option key={c.name} value={c.name}>
-                  {c.name} ({c.count} док.)
-                </option>
+              {collections.map(c => (
+                <option key={c.name} value={c.name}>{c.name} ({c.count} док.)</option>
               ))}
             </select>
           )}
-          <button className="settings-btn" onClick={() => setShowSettings(true)}>
-            ⚙
-          </button>
-          <button className="settings-btn" onClick={handleNewChat}>
-            ✨
-          </button>
+          <button className="settings-btn" onClick={() => setShowSettings(true)}>⚙</button>
+          <button className="settings-btn" onClick={handleNewChat}>✨</button>
         </div>
       </div>
 
+      {/* Messages */}
       <div className="messages" ref={msgContainerRef} onScroll={handleScroll}>
         {messages.length === 0 && !streaming && (
-          <div
-            style={{
-              textAlign: 'center',
-              color: 'var(--text2)',
-              marginTop: 60,
-              fontSize: 14,
-            }}
-          >
+          <div style={{ textAlign: 'center', color: 'var(--text2)', marginTop: 60, fontSize: 14 }}>
             <div style={{ fontSize: 40, marginBottom: 12 }}>💬</div>
             <div>Начните диалог с моделью</div>
             {!providerOnline && (
-              <div style={{ marginTop: 8, color: 'var(--red)' }}>
-                ⚠ Провайдер недоступен. Выберите другой или проверьте подключение.
-              </div>
+              <div style={{ marginTop: 8, color: 'var(--red)' }}>⚠ Провайдер недоступен</div>
             )}
             {mode === 'rag' && !selectedCollection && (
-              <div style={{ marginTop: 8, color: 'var(--accent)' }}>
-                ⚠ Выбран режим RAG, но не выбрана коллекция
-              </div>
+              <div style={{ marginTop: 8, color: 'var(--accent)' }}>⚠ Выбран RAG без коллекции</div>
             )}
           </div>
         )}
 
         {messages.map((msg) => (
-          <div key={msg.id} className={`message ${msg.role}`}>
-            <div className="msg-bubble">
-              {msg.role === 'assistant' && msg.thinking && showThinking && (
-                <details className="thinking-block">
-                  <summary>🤔 Размышления модели</summary>
-                  <div className="thinking-content">
-                    {cleanThinking(msg.thinking)}
-                  </div>
-                </details>
-              )}
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                {stripHtml(msg.content)}
-              </ReactMarkdown>
-              {msg.role === 'assistant' && msg.metrics && (
-                <div className="metrics-bar">
-                  ⏱ {msg.metrics.time_sec}с · {msg.metrics.tokens} токенов
-                  {typeof msg.metrics.lm_tokens_per_sec === 'number' ? (
-                    <>
-                      {msg.metrics.input_tokens ? (
-                        <> · вход: {msg.metrics.input_tokens}</>
-                      ) : null}
-                      {msg.metrics.reasoning_tokens ? (
-                        <> · размышления: {msg.metrics.reasoning_tokens}</>
-                      ) : null}
-                      · {Number(msg.metrics.lm_tokens_per_sec).toFixed(1)} ток/с
-                      {msg.metrics.ttft ? (
-                        <> · TTFT: {Number(msg.metrics.ttft).toFixed(2)}с</>
-                      ) : null}
-                    </>
-                  ) : (
-                    msg.metrics.output_tokens > 0 && (
-                      <> · {msg.metrics.output_tokens} токенов за {msg.metrics.output_time_sec}с ({msg.metrics.tokens_per_sec} ток/с)</>
-                    )
-                  )}
-                </div>
-              )}
-              {msg.ts && (
-                <div className="msg-timestamp">{formatTime(msg.ts)}</div>
-              )}
-            </div>
-            <div className="msg-actions">
-              <button
-                className="msg-action-btn"
-                onClick={() => handleCopy(msg.content)}
-                title="Копировать"
-              >
-                📋
-              </button>
-              {msg.role === 'user' && (
-                <button
-                  className="msg-action-btn"
-                  onClick={() => handleEdit(msg.id)}
-                  title="Редактировать"
-                >
-                  ✏
-                </button>
-              )}
-              {msg.role === 'assistant' && (
-                <button
-                  className="msg-action-btn"
-                  onClick={() => handleRegenerate(msg.id)}
-                  title="Перегенерировать"
-                >
-                  🔄
-                </button>
-              )}
-            </div>
-          </div>
+          <MessageBubble key={msg.id} msg={msg} showThinking={showThinking}
+            onCopy={handleCopy}
+            onEdit={msg.role === 'user' ? () => handleEdit(msg.id) : undefined}
+            onRegenerate={msg.role === 'assistant' ? () => handleRegenerate(msg.id) : undefined}
+          />
         ))}
 
         {streaming && (
@@ -496,19 +204,13 @@ export default function ChatPage({ sidebarOpen, setSidebarOpen }: ChatPageProps)
               {streamThinking && showThinking && (
                 <details className="thinking-block">
                   <summary>🤔 Размышления модели</summary>
-                  <div className="thinking-content">
-                    {cleanThinking(streamThinking)}
-                  </div>
+                  <div className="thinking-content">{cleanThinking(streamThinking)}</div>
                 </details>
               )}
               {streamText ? (
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                  {stripHtml(streamText)}
-                </ReactMarkdown>
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>{stripHtml(streamText)}</ReactMarkdown>
               ) : (
-                <div className="typing">
-                  <span /><span /><span />
-                </div>
+                <div className="typing"><span /><span /><span /></div>
               )}
             </div>
           </div>
@@ -520,9 +222,7 @@ export default function ChatPage({ sidebarOpen, setSidebarOpen }: ChatPageProps)
               <details>
                 <summary>📄 Источники ({sources.length})</summary>
                 {sources.map((s, i) => (
-                  <div key={i} className="source-item">
-                    <strong>{s.filename}</strong> — {s.content}
-                  </div>
+                  <div key={i} className="source-item"><strong>{s.filename}</strong> — {s.content}</div>
                 ))}
               </details>
             </div>
@@ -531,13 +231,9 @@ export default function ChatPage({ sidebarOpen, setSidebarOpen }: ChatPageProps)
 
         {error && (
           <div className="message assistant">
-            <div className="msg-bubble" style={{ background: 'var(--red)', color: '#fff' }}>
-              ❌ {error}
-            </div>
+            <div className="msg-bubble" style={{ background: 'var(--red)', color: '#fff' }}>❌ {error}</div>
             <div className="msg-actions" style={{ opacity: 1 }}>
-              <button className="msg-action-btn" onClick={handleRetry} title="Повторить">
-                🔄 Повторить
-              </button>
+              <button className="msg-action-btn" onClick={handleRetry} title="Повторить">🔄 Повторить</button>
             </div>
           </div>
         )}
@@ -545,73 +241,45 @@ export default function ChatPage({ sidebarOpen, setSidebarOpen }: ChatPageProps)
         <div ref={msgEndRef} />
       </div>
 
+      {/* Context bar */}
       {contextUsed > 0 && (
         <div className="context-bar">
-          <div
-            className="context-bar-fill"
-            style={{ width: `${Math.min(100, (contextUsed / settings.contextLength) * 100)}%` }}
-          />
+          <div className="context-bar-fill"
+            style={{ width: `${Math.min(100, (contextUsed / settings.contextLength) * 100)}%` }} />
           <span className="context-bar-text">
-            Контекст: {contextUsed.toLocaleString()} / {settings.contextLength.toLocaleString()} токенов
-            {' '}({((contextUsed / settings.contextLength) * 100).toFixed(1)}%)
+            Контекст: {contextUsed.toLocaleString()} / {settings.contextLength.toLocaleString()} токенов ({((contextUsed / settings.contextLength) * 100).toFixed(1)}%)
           </span>
         </div>
       )}
 
+      {/* Input */}
       <div className="input-area">
         <div className="input-row">
-          <button
-            className={`think-toggle ${showThinking ? 'active' : ''}`}
+          <button className={`think-toggle ${showThinking ? 'active' : ''}`}
             onClick={() => setShowThinking(!showThinking)}
-            title={showThinking ? 'Скрыть размышления' : 'Показать размышления'}
-          >
-            🧠
-          </button>
+            title={showThinking ? 'Скрыть размышления' : 'Показать размышления'}>🧠</button>
           <div className="input-wrap">
             {editingId && (
               <div className="edit-indicator">
                 ✏ Редактирование
-                <button
-                  className="edit-cancel-btn"
-                  onClick={() => { setEditingId(null); setInput('') }}
-                >
-                  Отмена
-                </button>
+                <button className="edit-cancel-btn" onClick={() => { setEditingId(null); setInput('') }}>Отмена</button>
               </div>
             )}
-            <textarea
-              ref={inputRef}
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
+            <textarea ref={inputRef} value={input} onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
               placeholder={editingId ? 'Редактирование...' : 'Введите сообщение...'}
-              rows={1}
-              disabled={loading}
-              style={loading ? { opacity: 0.5 } : {}}
-            />
+              rows={1} disabled={loading} style={loading ? { opacity: 0.5 } : {}} />
           </div>
           {streaming ? (
-            <button className="stop-btn" onClick={handleStop}>
-              ⏹
-            </button>
+            <button className="stop-btn" onClick={handleStop}>⏹</button>
           ) : (
-            <button
-              className="send-btn"
-              onClick={handleSend}
-              disabled={loading || !input.trim()}
-            >
-              ➤
-            </button>
+            <button className="send-btn" onClick={handleSend} disabled={loading || !input.trim()}>➤</button>
           )}
         </div>
       </div>
 
       {showSettings && (
-        <SettingsPanel
-          settings={settings}
-          onChange={setSettings}
-          onClose={() => setShowSettings(false)}
-        />
+        <SettingsPanel settings={settings} onChange={setSettings} onClose={() => setShowSettings(false)} />
       )}
     </div>
   )

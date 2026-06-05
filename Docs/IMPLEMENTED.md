@@ -7,8 +7,15 @@ React + Vite (JS) ──HTTP──> FastAPI ──HTTP──> Ollama / OpenAI / 
                                                ──HTTP──> ChromaDB
 ```
 
-- **backend/** — FastAPI, единый прокси для чата и эмбеддингов
-- **frontend/** — React + Vite (JS, CSS dark theme)
+- **backend/** — FastAPI, модульная архитектура
+  - `main.py` — bootstrap, startup, монтирование роутеров (9 строк логики)
+  - `state.py` — AppState (провайдер + конфиг), фабрика провайдеров, auto_select_models
+  - `streaming.py` — compute_stream_metrics, sse_token/sse_done (общая логика метрик + SSE)
+  - `agent.py` — run_agent_loop (цикл инструментов MCP)
+  - `utils.py` — extract_thinking, build_messages (с pytest-тестами)
+  - `workspace_db.py` — SQLite persistence для Workspace
+  - `routes/` — роутеры: `chat.py`, `provider_routes.py`, `collections.py`, `workspaces.py`
+- **frontend/** — React + Vite (JS, CSS dark theme), хуки `useChat` и `useProviders`
 
 ## Backend — реализовано
 
@@ -40,7 +47,9 @@ React + Vite (JS) ──HTTP──> FastAPI ──HTTP──> Ollama / OpenAI / 
 - Источники возвращаются в ответе (sources)
 
 ### Workspace
-- CRUD через `/api/workspaces` — **in-memory** (без SQLite)
+- CRUD через `/api/workspaces` — **SQLite** (`workspace_db.py`)
+- Таблица workspaces: id, name, provider, chat_model, embedding_model, system_prompt, temperature, max_tokens, top_p, context_length, collections (JSON), timestamps
+- `init_db()` при старте приложения
 
 ### Прочее
 - CORS (все origins)
@@ -77,7 +86,6 @@ React + Vite (JS) ──HTTP──> FastAPI ──HTTP──> Ollama / OpenAI / 
 
 ## Не реализовано (отложено)
 
-- SQLite для Workspace (сейчас in-memory)
 - Страница Workspace во фронтенде
 - Context length (есть в модели, не используется)
 - MCP-сервер для ChromaDB
