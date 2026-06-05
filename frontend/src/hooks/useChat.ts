@@ -178,8 +178,7 @@ export function useChat() {
         setSources(srcs || [])
         setMetrics(met || null)
         if (met) {
-          const inp = met.input_tokens || 0
-          if (inp > 0) setContextUsed(inp + (met.tokens || 0))
+          setContextUsed((met.input_tokens || 0) + (met.tokens || 0))
         }
         // Refresh chat list
         api.getChats().then(setChats).catch(() => {})
