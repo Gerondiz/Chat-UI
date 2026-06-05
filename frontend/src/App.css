@@ -495,6 +495,14 @@ html, body, #root {
   display: block;
 }
 
+.msg-bubble img[alt] {
+  min-width: 48px;
+  min-height: 48px;
+  background: var(--bg2);
+  border: 1px dashed var(--border);
+  object-fit: contain;
+}
+
 .sources-block {
   margin-top: 8px;
   padding: 8px 12px;

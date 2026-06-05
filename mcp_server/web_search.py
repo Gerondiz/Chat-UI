@@ -83,6 +83,42 @@ async def _fetch_page(client: httpx.AsyncClient, url: str) -> str:
         return ""
 
 
+async def _safe_ddgs_call(method: str, query: str, **kwargs):
+    """Call DDGS method with retry on rate limit."""
+    import random
+    for attempt in range(5):
+        try:
+            with DDGS() as ddgs:
+                fn = getattr(ddgs, method)
+                result = fn(query, **kwargs)
+                return list(result) if result else []
+        except Exception as exc:
+            if attempt < 4:
+                wait = 2 ** (attempt + 1) + random.uniform(0, 1)
+                logger.warning("DDGS %s failed (attempt %d), retrying in %.1fs...", method, attempt + 1, wait)
+                await asyncio.sleep(wait)
+            else:
+                logger.error("DDGS %s failed after 5 attempts: %s", method, exc)
+                return []
+    return []
+
+
+async def _validate_image_url(client: httpx.AsyncClient, url: str) -> str:
+    """Check if URL returns a valid image. Returns validated URL or empty string."""
+    try:
+        resp = await client.head(url, timeout=5.0, headers={"User-Agent": "Mozilla/5.0"})
+        if resp.status_code >= 400:
+            return ""
+        ct = resp.headers.get("content-type", "")
+        if ct.startswith("image/"):
+            return url
+        return ""
+    except httpx.ConnectError:
+        return ""
+    except Exception:
+        return url
+
+
 async def search_web(query: str, max_results: int = 5) -> list[dict[str, str]]:
     """Search the web using DuckDuckGo and fetch page content."""
     raw = await _safe_ddgs_call("text", query, max_results=max_results)
@@ -114,33 +150,13 @@ async def search_web(query: str, max_results: int = 5) -> list[dict[str, str]]:
     return results
 
 
-async def _safe_ddgs_call(method: str, query: str, **kwargs):
-    """Call DDGS method with retry on rate limit."""
-    import random
-    for attempt in range(5):
-        try:
-            with DDGS() as ddgs:
-                fn = getattr(ddgs, method)
-                result = fn(query, **kwargs)
-                return list(result) if result else []
-        except Exception as exc:
-            if attempt < 4:
-                wait = 2 ** (attempt + 1) + random.uniform(0, 1)
-                logger.warning("DDGS %s failed (attempt %d), retrying in %.1fs...", method, attempt + 1, wait)
-                await asyncio.sleep(wait)
-            else:
-                logger.error("DDGS %s failed after 5 attempts: %s", method, exc)
-                return []
-    return []
-
-
 async def search_images(query: str, max_results: int = 5) -> list[dict[str, str]]:
-    """Search for images using DuckDuckGo."""
+    """Search for images using DuckDuckGo. Validates URLs and falls back to thumbnails."""
     raw = await _safe_ddgs_call("images", query, max_results=max_results, region="wt-wt")
 
-    results: list[dict[str, str]] = []
+    candidates: list[dict[str, str]] = []
     for r in raw:
-        results.append({
+        candidates.append({
             "title": r.get("title", ""),
             "image_url": r.get("image", ""),
             "thumbnail": r.get("thumbnail", ""),
@@ -148,4 +164,20 @@ async def search_images(query: str, max_results: int = 5) -> list[dict[str, str]
             "width": str(r.get("width", "")),
             "height": str(r.get("height", "")),
         })
+
+    async with httpx.AsyncClient(timeout=5.0, follow_redirects=False) as client:
+        checks = await asyncio.gather(
+            *(_validate_image_url(client, c["image_url"]) for c in candidates),
+            return_exceptions=True,
+        )
+
+    results: list[dict[str, str]] = []
+    for i, c in enumerate(candidates):
+        valid = isinstance(checks[i], str) and bool(checks[i])
+        if not valid and c["thumbnail"]:
+            c["image_url"] = c["thumbnail"]
+            results.append(c)
+            continue
+        results.append(c)
+
     return results
