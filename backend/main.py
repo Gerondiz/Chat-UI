@@ -1,5 +1,8 @@
+import asyncio
 import json
 import logging
+import re
+import time
 from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
@@ -35,6 +38,7 @@ async def health():
 
 current_provider: BaseProvider = None
 current_config: ProviderConfig = None
+_provider_lock = asyncio.Lock()
 
 
 def _make_provider(cfg: ProviderConfig) -> BaseProvider:
@@ -65,25 +69,41 @@ def _default_config(name: str = "ollama") -> ProviderConfig:
     if name == "ollama":
         return ProviderConfig(
             name="ollama",
-            chat_model=config.DEFAULT_CHAT_MODEL,
-            embedding_model=config.DEFAULT_EMBEDDING_MODEL,
+            chat_model="",
+            embedding_model="",
             base_url=config.OLLAMA_BASE_URL,
         )
     if name == "openai":
         return ProviderConfig(
             name="openai",
-            chat_model="google/gemma-4-e4b",
-            embedding_model="text-embedding-nomic-embed-text-v1.5",
+            chat_model="",
+            embedding_model="",
             base_url=config.OPENAI_BASE_URL,
             api_key=config.OPENAI_API_KEY,
         )
     return ProviderConfig(
         name="lmstudio",
-        chat_model="google/gemma-4-e4b",
-        embedding_model="text-embedding-nomic-embed-text-v1.5",
-        base_url=config.OPENAI_BASE_URL,
-        api_key=config.OPENAI_API_KEY,
+        chat_model="",
+        embedding_model="",
+        base_url=config.LMSTUDIO_BASE_URL,
     )
+
+
+async def _auto_select_models(provider: BaseProvider, cfg: ProviderConfig) -> ProviderConfig:
+    """Fetch available models and pick the first chat model and first embedding model."""
+    try:
+        chat_models, embedding_models = await provider.list_models()
+        if chat_models and not cfg.chat_model:
+            cfg.chat_model = chat_models[0]
+        if embedding_models and not cfg.embedding_model:
+            cfg.embedding_model = embedding_models[0]
+    except Exception:
+        pass
+    if not cfg.chat_model:
+        cfg.chat_model = "gemma3:4b"
+    if not cfg.embedding_model:
+        cfg.embedding_model = "nomic-embed-text"
+    return cfg
 
 
 @app.on_event("startup")
@@ -91,10 +111,11 @@ async def startup():
     global current_provider, current_config
     current_config = _default_config("ollama")
     current_provider = _make_provider(current_config)
+    current_config = await _auto_select_models(current_provider, current_config)
+    current_provider = _make_provider(current_config)
     # start MCP host in background
-    import asyncio
     asyncio.create_task(mcp_host.start())
-    ready = await mcp_host.wait_ready(timeout=5)
+    ready = await mcp_host.wait_ready(timeout=20)
     if ready:
         logger.info("MCP host ready with tools: %s", [t.name for t in mcp_host.tools])
     else:
@@ -110,56 +131,63 @@ async def get_providers():
 
 @app.get("/api/provider")
 async def get_provider():
-    return current_config
+    async with _provider_lock:
+        return current_config
 
 
 @app.put("/api/provider")
 async def switch_provider(switch: ProviderSwitch):
     global current_provider, current_config
-    current_config = _default_config(switch.name)
-    current_provider = _make_provider(current_config)
+    async with _provider_lock:
+        current_config = _default_config(switch.name)
+        current_provider = _make_provider(current_config)
+        current_config = await _auto_select_models(current_provider, current_config)
+        current_provider = _make_provider(current_config)
     return current_config
 
 
 @app.put("/api/provider/config")
 async def update_provider_config(cfg: ProviderConfig):
     global current_provider, current_config
-    current_config = cfg
-    current_provider = _make_provider(cfg)
+    async with _provider_lock:
+        current_config = cfg
+        current_provider = _make_provider(cfg)
     return current_config
 
 
 @app.get("/api/provider/status")
 async def provider_status():
     global current_provider, current_config
-    try:
-        online = await current_provider.check()
-        chat_models, embedding_models = [], []
-        if online:
-            chat_models, embedding_models = await current_provider.list_models()
-        return {
-            "name": current_config.name,
-            "online": online,
-            "chat_model": current_config.chat_model,
-            "embedding_model": current_config.embedding_model,
-            "chat_models": chat_models,
-            "embedding_models": embedding_models,
-        }
-    except Exception as e:
-        return {
-            "name": current_config.name,
-            "online": False,
-            "chat_model": current_config.chat_model,
-            "embedding_model": current_config.embedding_model,
-            "chat_models": [],
-            "embedding_models": [],
-            "error": str(e),
-        }
+    async with _provider_lock:
+        try:
+            online = await current_provider.check()
+            chat_models, embedding_models = [], []
+            if online:
+                chat_models, embedding_models = await current_provider.list_models()
+            return {
+                "name": current_config.name,
+                "online": online,
+                "chat_model": current_config.chat_model,
+                "embedding_model": current_config.embedding_model,
+                "chat_models": chat_models,
+                "embedding_models": embedding_models,
+            }
+        except Exception as e:
+            return {
+                "name": current_config.name,
+                "online": False,
+                "chat_model": current_config.chat_model,
+                "embedding_model": current_config.embedding_model,
+                "chat_models": [],
+                "embedding_models": [],
+                "error": str(e),
+            }
 
 
 @app.get("/api/provider/models")
 async def provider_models():
-    chat_models, embedding_models = await current_provider.list_models()
+    async with _provider_lock:
+        chat_models, embedding_models = await current_provider.list_models()
     return {"chat_models": chat_models, "embedding_models": embedding_models}
 
 
@@ -173,12 +201,27 @@ def _build_messages(req: ChatRequest) -> list[dict]:
 
 
 def _extract_thinking(resp: str) -> tuple[str, str]:
-    """Split response into (content, thinking) based on <think> tags."""
-    if "<think" in resp and "</think>" in resp:
+    if "<think" in resp and " response" in resp:
         t_start = resp.index("<think")
-        t_end = resp.index("</think>") + len("</think>")
+        t_end = resp.rindex(" response") + len(" response")
         thinking = resp[t_start:t_end]
         content = resp[:t_start] + resp[t_end:]
+        return content, thinking
+    if "<think" in resp:
+        t_start = resp.index("<think")
+        # No closing tag - strip the <think... prefix
+        # Find a reasonable boundary (newline after think block, or end of sentence)
+        rest = resp[t_start + 6:]  # after "<think"
+        # Try to find a natural boundary
+        for boundary in ["\n\n", ". ", ".\n"]:
+            idx = rest.find(boundary)
+            if idx > 20:  # at least some thinking content
+                thinking = resp[t_start:t_start + 6 + idx + len(boundary)]
+                content = resp[:t_start] + resp[t_start + 6 + idx + len(boundary):]
+                return content, thinking
+        # Fallback: put everything after <think into thinking
+        thinking = resp[t_start:]
+        content = resp[:t_start]
         return content, thinking
     return resp, ""
 
@@ -212,30 +255,29 @@ async def _run_agent_loop(
             )
         except Exception as exc:
             logger.warning("chat_with_tools failed (%s), falling back to direct chat", exc)
-            content = await current_provider.chat(
-                current_messages,
-                system_prompt="",
-                temperature=temperature,
-                max_tokens=max_tokens,
-                top_p=top_p,
-                reasoning=reasoning,
-            )
-            return content, all_sources, []
+            logger.info("chat_with_tools exception type: %s, args: %s, repr: %r",
+                        type(exc).__name__, exc.args, exc)
+            try:
+                content = await current_provider.chat(
+                    current_messages,
+                    system_prompt="",
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    top_p=top_p,
+                    reasoning=reasoning,
+                )
+                return content, all_sources, []
+            except Exception as fallback_exc:
+                logger.error("fallback chat also failed (%s)", fallback_exc)
+                logger.info("fallback exception type: %s, args: %s, repr: %r",
+                            type(fallback_exc).__name__, fallback_exc.args, fallback_exc)
+                raise
 
         # Append assistant response to conversation
-        assistant_msg: dict = {"role": "assistant", "content": None if result.tool_calls else result.content}
-        if result.tool_calls:
-            assistant_msg["tool_calls"] = [
-                {
-                    "id": tc.id if tc.id else f"call_{i}",
-                    "type": "function",
-                    "function": {
-                        "name": tc.name,
-                        "arguments": json.dumps(tc.arguments) if isinstance(tc.arguments, dict) else tc.arguments,
-                    },
-                }
-                for i, tc in enumerate(result.tool_calls)
-            ]
+        assistant_msg = current_provider.format_assistant_message(
+            "" if result.tool_calls else result.content,
+            result.tool_calls,
+        )
         current_messages.append(assistant_msg)
 
         if not result.tool_calls:
@@ -286,7 +328,6 @@ async def chat(req: ChatRequest):
 
         if req.mode == "agent":
             if not mcp_host.is_ready:
-                # fallback to direct chat
                 resp = await current_provider.chat(
                     messages, system_prompt="",
                     temperature=req.temperature, max_tokens=req.max_tokens,
@@ -310,8 +351,11 @@ async def chat(req: ChatRequest):
                 )
             thinking_full = ""
             final_content = content or ""
-            if "<think" in final_content and "</think>" in final_content:
+            if "<think" in final_content and " response" in final_content:
                 final_content, thinking_full = _extract_thinking(final_content)
+                if not final_content.strip() and thinking_full:
+                    final_content = thinking_full.replace("<think", "").replace(" response", "")
+                    thinking_full = ""
             return {
                 "role": "assistant",
                 "content": final_content,
@@ -358,6 +402,7 @@ async def chat_stream(req: ChatRequest):
             if not mcp_host.is_ready:
                 # stream directly without tools
                 async def pass_through():
+                    t0 = time.monotonic()
                     async for token in current_provider.chat_stream(
                         messages, system_prompt="",
                         temperature=req.temperature, max_tokens=req.max_tokens,
@@ -366,12 +411,11 @@ async def chat_stream(req: ChatRequest):
                         if not token:
                             continue
                         yield f"data: {json.dumps({'token': token, 'done': False})}\n\n"
-                    import time
-                    elapsed = time.time()
+                    elapsed = round(time.monotonic() - t0, 2)
                     fallback_done = {
                         "token": "", "done": True, "full": "", "thinking": "",
                         "sources": [],
-                        "metrics": {"time_sec": 0, "tokens": 0, "output_time_sec": 0, "output_tokens": 0, "tokens_per_sec": 0},
+                        "metrics": {"time_sec": elapsed, "tokens": 0, "output_time_sec": elapsed, "output_tokens": 0, "tokens_per_sec": 0},
                     }
                     yield f"data: {json.dumps(fallback_done)}\n\n"
                 return StreamingResponse(pass_through(), media_type="text/event-stream")
@@ -388,13 +432,10 @@ async def chat_stream(req: ChatRequest):
             if agent_content is not None:
                 # Response without tool calls — emit directly
                 async def emit_agent():
-                    import re
-                    content_only = agent_content
-                    thinking_full = ""
-                    if "<think" in agent_content and "</think>" in agent_content:
-                        thinking_parts = re.findall(r"<think[\s\S]*?</think>", agent_content)
-                        thinking_full = "".join(thinking_parts)
-                        content_only = re.sub(r"<think[\s\S]*?</think>", "", agent_content)
+                    content_only, thinking_full = _extract_thinking(agent_content)
+                    if not content_only.strip() and thinking_full:
+                        content_only = thinking_full.replace(" thinking", "").replace(" response", "")
+                        thinking_full = ""
 
                     words = content_only.split(" ")
                     for i, w in enumerate(words):
@@ -416,8 +457,7 @@ async def chat_stream(req: ChatRequest):
 
             # tool loop ended — stream final response from provider
             async def stream_agent():
-                import time
-                start_time = time.time()
+                t0 = time.monotonic()
                 full = ""
                 token_count = 0
                 async for token in current_provider.chat_stream(
@@ -431,15 +471,18 @@ async def chat_stream(req: ChatRequest):
                     token_count += 1
                     yield f"data: {json.dumps({'token': token, 'done': False})}\n\n"
 
-                elapsed = time.time() - start_time
+                elapsed = round(time.monotonic() - t0, 2)
                 content_only, thinking_full = _extract_thinking(full)
+                if not content_only.strip() and thinking_full:
+                    content_only = thinking_full.replace("<think>", "").replace("</think>", "")
+                    thinking_full = ""
                 tps = round(token_count / elapsed, 1) if elapsed > 0 else 0
                 done_data = {
                     "token": "", "done": True, "full": content_only,
                     "thinking": thinking_full, "sources": sources,
                     "metrics": {
-                        "time_sec": round(elapsed, 1), "tokens": token_count,
-                        "output_time_sec": round(elapsed, 1), "output_tokens": token_count,
+                        "time_sec": elapsed, "tokens": token_count,
+                        "output_time_sec": elapsed, "output_tokens": token_count,
                         "tokens_per_sec": tps,
                     },
                 }
@@ -461,7 +504,7 @@ async def chat_stream(req: ChatRequest):
             token_count = 0
             output_tokens = 0
             output_start = None
-            start_time = __import__("time").time()
+            start_time = time.monotonic()
             lm_stats = None
 
             async for token in current_provider.chat_stream(
@@ -488,11 +531,10 @@ async def chat_stream(req: ChatRequest):
                 yield f"data: {json.dumps({'token': token, 'done': False})}\n\n"
 
                 if output_start is None and "<think" not in full:
-                    output_start = __import__("time").time()
+                    output_start = time.monotonic()
 
-            elapsed = __import__("time").time() - start_time
+            elapsed = round(time.monotonic() - start_time, 2)
 
-            import re
             content_only = full
             thinking_full = ""
             if "<think" in full and "</think>" in full:
@@ -505,7 +547,7 @@ async def chat_stream(req: ChatRequest):
                 output_start = start_time
             if not has_thinking:
                 output_tokens = token_count
-            output_elapsed = __import__("time").time() - output_start if output_start else elapsed
+            output_elapsed = round(time.monotonic() - output_start, 2) if output_start else elapsed
             tokens_per_sec = round(output_tokens / output_elapsed, 1) if output_elapsed > 0 and output_tokens > 0 else 0
 
             sources_data = []
@@ -516,14 +558,18 @@ async def chat_stream(req: ChatRequest):
                 })
 
             metrics = {
-                "time_sec": round(elapsed, 1),
+                "time_sec": elapsed,
                 "tokens": token_count,
-                "output_time_sec": round(output_elapsed, 1),
+                "output_time_sec": output_elapsed,
                 "output_tokens": output_tokens,
                 "tokens_per_sec": tokens_per_sec,
             }
             if lm_stats:
                 metrics["input_tokens"] = lm_stats.get("input_tokens", 0)
+                lm_output = lm_stats.get("output_tokens", 0)
+                if lm_output:
+                    metrics["tokens"] = lm_output
+                    metrics["output_tokens"] = lm_output
                 metrics["reasoning_tokens"] = lm_stats.get("reasoning_output_tokens", 0)
                 metrics["lm_tokens_per_sec"] = round(lm_stats.get("tokens_per_second", 0), 1)
                 metrics["ttft"] = round(lm_stats.get("time_to_first_token_seconds", 0), 2)

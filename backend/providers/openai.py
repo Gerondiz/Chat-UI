@@ -11,7 +11,7 @@ class OpenAIProvider(BaseProvider):
         headers = {"Content-Type": "application/json"}
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
-        self._client = httpx.AsyncClient(timeout=120, headers=headers)
+        self._client = httpx.AsyncClient(timeout=300, headers=headers)
 
     async def chat(
         self, messages, system_prompt="",
@@ -33,33 +33,12 @@ class OpenAIProvider(BaseProvider):
         resp.raise_for_status()
         data = resp.json()
         await resp.aclose()
-        return data["choices"][0]["message"]["content"]
-
-    async def chat_with_tools(
-        self, messages, system_prompt="",
-        temperature=0.7, max_tokens=4096, top_p=0.9,
-        reasoning=True, tools=None,
-    ) -> ChatResult:
-        msgs = list(messages)
-        if system_prompt:
-            msgs.insert(0, {"role": "system", "content": system_prompt})
-        body = {
-            "model": self.chat_model,
-            "messages": msgs,
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-            "top_p": top_p,
-            "stream": False,
-        }
-        if tools:
-            body["tools"] = tools
-        resp = await self._client.post(f"{self.base_url}/chat/completions", json=body)
-        resp.raise_for_status()
-        data = resp.json()
-        await resp.aclose()
         choice = data["choices"][0]["message"]
         content = choice.get("content") or ""
-        raw_calls = choice.get("tool_calls")
+        if not content:
+            rc = choice.get("reasoning_content") or ""
+            if rc:
+                content = f"<think{rc} response"
         tool_calls = None
         if raw_calls:
             tool_calls = []
@@ -95,6 +74,7 @@ class OpenAIProvider(BaseProvider):
             "max_tokens": max_tokens,
             "top_p": top_p,
             "stream": True,
+            "stream_options": {"include_usage": True},
         }
         async with self._client.stream("POST", f"{self.base_url}/chat/completions", json=body) as resp:
             async for line in resp.aiter_lines():
@@ -106,6 +86,14 @@ class OpenAIProvider(BaseProvider):
                         break
                     try:
                         chunk = json.loads(payload)
+                        usage = chunk.get("usage")
+                        if usage:
+                            stats = {
+                                "input_tokens": usage.get("prompt_tokens", 0),
+                                "output_tokens": usage.get("completion_tokens", 0),
+                            }
+                            yield f"__LMSTATS__{json.dumps(stats)}__LMSTATS__"
+                            continue
                         choices = chunk.get("choices", [])
                         if not choices:
                             continue
@@ -115,7 +103,7 @@ class OpenAIProvider(BaseProvider):
                         if not reasoning:
                             reasoning = delta.get("reasoning", "") or ""
                         if reasoning:
-                            yield f"<think>{reasoning}</think>"
+                            yield f"<think{reasoning} response"
                         if content:
                             yield content
                     except json.JSONDecodeError:

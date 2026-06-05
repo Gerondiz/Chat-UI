@@ -36,6 +36,26 @@ class BaseProvider(ABC):
         )
         return ChatResult(content=content)
 
+    def format_assistant_message(
+        self, content: str | None, tool_calls: list[ToolCall] | None
+    ) -> dict:
+        """Build assistant message with tool_calls in provider-specific format."""
+        import json
+        msg: dict = {"role": "assistant", "content": content}
+        if tool_calls:
+            msg["tool_calls"] = [
+                {
+                    "id": tc.id if tc.id else f"call_{i}",
+                    "type": "function",
+                    "function": {
+                        "name": tc.name,
+                        "arguments": json.dumps(tc.arguments) if isinstance(tc.arguments, dict) else tc.arguments,
+                    },
+                }
+                for i, tc in enumerate(tool_calls)
+            ]
+        return msg
+
     def format_tool_messages(
         self, tool_calls: list[ToolCall], results: list[str]
     ) -> list[dict]:

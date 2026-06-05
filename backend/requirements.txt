@@ -8,3 +8,4 @@ python-docx>=1.1.0
 python-multipart>=0.0.12
 pydantic>=2.0.0
 mcp>=1.0.0
+duckduckgo_search>=8.0.0

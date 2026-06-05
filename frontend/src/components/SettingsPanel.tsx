@@ -50,11 +50,20 @@ export default function SettingsPanel({ settings, onChange, onClose }: SettingsP
         </div>
 
         <div className="settings-group">
-          <label>Max tokens</label>
+          <label>Max tokens (макс. генерация)</label>
           <input
             type="number" min="64" max="32768" step="1"
             value={settings.maxTokens}
             onChange={(e) => set('maxTokens', parseInt(e.target.value) || 4096)}
+          />
+        </div>
+
+        <div className="settings-group">
+          <label>Контекстное окно модели (токенов)</label>
+          <input
+            type="number" min="1024" max="524288" step="1"
+            value={settings.contextLength}
+            onChange={(e) => set('contextLength', parseInt(e.target.value) || 131072)}
           />
         </div>
 

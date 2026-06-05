@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 REPO_ROOT = Path(__file__).resolve().parent.parent
 MCP_SERVER_CMD = os.getenv(
     "MCP_SERVER_CMD",
-    "python3 chromadb_mcp/server.py",
+    "python3 mcp_server/server.py",
 )
 
 
@@ -30,30 +30,33 @@ class McpHost:
         self._ready = asyncio.Event()
 
     async def start(self) -> None:
-        cmd_parts = MCP_SERVER_CMD.split()
-        params = StdioServerParameters(
-            command=cmd_parts[0],
-            args=cmd_parts[1:],
-            env={**os.environ},
-            cwd=str(REPO_ROOT),
-        )
+        try:
+            cmd_parts = MCP_SERVER_CMD.split()
+            params = StdioServerParameters(
+                command=cmd_parts[0],
+                args=cmd_parts[1:],
+                env={**os.environ},
+                cwd=str(REPO_ROOT),
+            )
 
-        async with stdio_client(params) as (read, write):
-            self._read = read
-            self._write = write
-            async with ClientSession(read, write) as session:
-                self._session = session
-                await session.initialize()
-                result = await session.list_tools()
-                self._tools = result.tools
-                self._ready.set()
-                logger.info(
-                    "MCP server ready, %d tools loaded: %s",
-                    len(self._tools),
-                    [t.name for t in self._tools],
-                )
-                # keep session alive forever
-                await asyncio.Event().wait()
+            async with stdio_client(params) as (read, write):
+                self._read = read
+                self._write = write
+                async with ClientSession(read, write) as session:
+                    self._session = session
+                    await session.initialize()
+                    result = await session.list_tools()
+                    self._tools = result.tools
+                    self._ready.set()
+                    logger.info(
+                        "MCP server ready, %d tools loaded: %s",
+                        len(self._tools),
+                        [t.name for t in self._tools],
+                    )
+                    await asyncio.Event().wait()
+        except Exception as exc:
+            logger.error("MCP host failed to start: %s", exc)
+            self._ready.set()  # don't block wait_ready
 
     async def wait_ready(self, timeout: float = 15) -> bool:
         try:

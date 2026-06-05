@@ -8,6 +8,7 @@ from mcp.server import NotificationOptions, Server
 from mcp.server.stdio import stdio_server
 
 from db_manager import ChromaManager
+from web_search import search_web
 
 server = Server("chromadb-mcp-server")
 db = ChromaManager()
@@ -65,6 +66,27 @@ async def handle_list_tools() -> list[types.Tool]:
                 "properties": {},
             },
         ),
+        types.Tool(
+            name="search_web",
+            description=(
+                "Search the internet for current information. "
+                "Use this when you need up-to-date knowledge or facts outside the local database."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Search query",
+                    },
+                    "max_results": {
+                        "type": "integer",
+                        "description": "Number of results to return (default 5)",
+                    },
+                },
+                "required": ["query"],
+            },
+        ),
     ]
 
 
@@ -115,6 +137,21 @@ async def handle_call_tool(
         lines = ["Available collections:"]
         for c in collections:
             lines.append(f"- {c['name']} ({c['count']} files)")
+        return [types.TextContent(type="text", text="\n".join(lines))]
+
+    elif name == "search_web":
+        if not arguments or not arguments.get("query"):
+            raise ValueError("query is required")
+        query = arguments["query"]
+        max_results = arguments.get("max_results", 5)
+        results = search_web(query, max_results)
+        if not results:
+            return [types.TextContent(type="text", text=f"No search results found for '{query}'.")]
+        lines = [f"Web search results for '{query}':"]
+        for i, r in enumerate(results, 1):
+            lines.append(f"\n{i}. {r['title']}")
+            lines.append(f"   URL: {r['url']}")
+            lines.append(f"   {r['snippet']}")
         return [types.TextContent(type="text", text="\n".join(lines))]
 
     else:

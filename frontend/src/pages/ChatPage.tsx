@@ -19,6 +19,7 @@ const DEFAULT_SETTINGS: ChatSettings = {
   temperature: 0.7,
   maxTokens: 4096,
   topP: 0.9,
+  contextLength: 131072,
 }
 
 const PROVIDERS: { id: string; label: string }[] = [
@@ -26,6 +27,24 @@ const PROVIDERS: { id: string; label: string }[] = [
   { id: 'openai', label: 'LMStudio (OpenAI)' },
   { id: 'lmstudio', label: 'LMStudio (Native)' },
 ]
+
+function generateId(): string {
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID()
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+}
+
+function formatTime(ts: number): string {
+  const d = new Date(ts)
+  const now = new Date()
+  const pad = (n: number) => String(n).padStart(2, '0')
+  const time = `${pad(d.getHours())}:${pad(d.getMinutes())}`
+  if (
+    d.getDate() === now.getDate() &&
+    d.getMonth() === now.getMonth() &&
+    d.getFullYear() === now.getFullYear()
+  ) return time
+  return `${pad(d.getDate())}.${pad(d.getMonth() + 1)} ${time}`
+}
 
 interface ChatPageProps {
   sidebarOpen: boolean
@@ -48,6 +67,8 @@ export default function ChatPage({ sidebarOpen, setSidebarOpen }: ChatPageProps)
   const [settings, setSettings] = useState<ChatSettings>(DEFAULT_SETTINGS)
   const [sources, setSources] = useState<Source[]>([])
   const [metrics, setMetrics] = useState<Metrics | null>(null)
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [contextUsed, setContextUsed] = useState(0)
 
   const [providerName, setProviderName] = useState('ollama')
   const [providerOnline, setProviderOnline] = useState(false)
@@ -140,15 +161,15 @@ export default function ChatPage({ sidebarOpen, setSidebarOpen }: ChatPageProps)
     setLoading(false)
   }
 
-  const handleSend = async () => {
-    const text = input.trim()
+  const doSend = async (baseMessages: Message[], text: string) => {
     if (!text || loading) return
     setInput('')
     setError('')
     setMetrics(null)
+    setEditingId(null)
 
-    const userMsg: Message = { role: 'user', content: text }
-    const updated = [...messages, userMsg]
+    const userMsg: Message = { role: 'user', content: text, id: generateId(), ts: Date.now() }
+    const updated = [...baseMessages, userMsg]
     setMessages(updated)
 
     if (abortRef.current) abortRef.current()
@@ -182,17 +203,23 @@ export default function ChatPage({ sidebarOpen, setSidebarOpen }: ChatPageProps)
         setLoading(false)
         setStreamText('')
         setStreamThinking('')
-        setMessages((prev) => [
-          ...prev,
-          {
+        setMessages((prev) => {
+          const newMsg: Message = {
             role: 'assistant',
             content: full,
             thinking: thinking || '',
             metrics: met || null,
-          },
-        ])
+            id: generateId(),
+            ts: Date.now(),
+          }
+          return [...prev, newMsg]
+        })
         setSources(srcs || [])
         setMetrics(met || null)
+        if (met) {
+          const inp = met.input_tokens || 0
+          if (inp > 0) setContextUsed(inp + (met.tokens || 0))
+        }
       },
       (err: string) => {
         setStreaming(false)
@@ -202,7 +229,68 @@ export default function ChatPage({ sidebarOpen, setSidebarOpen }: ChatPageProps)
     )
   }
 
+  const handleSend = async () => {
+    const text = input.trim()
+    if (!text || loading) return
+
+    if (editingId) {
+      const editIdx = messages.findIndex(m => m.id === editingId)
+      if (editIdx !== -1) {
+        const baseMessages = messages.slice(0, editIdx)
+        await doSend(baseMessages, text)
+        return
+      }
+      setEditingId(null)
+    }
+    await doSend(messages, text)
+  }
+
+  const handleEdit = (msgId: string) => {
+    if (loading) return
+    const msg = messages.find(m => m.id === msgId) as import('../types').UserMessage | undefined
+    if (!msg) return
+    setEditingId(msgId)
+    setInput(msg.content)
+    inputRef.current?.focus()
+  }
+
+  const handleRegenerate = async (msgId: string) => {
+    if (loading) return
+    if (abortRef.current) abortRef.current()
+    setEditingId(null)
+
+    const msgIdx = messages.findIndex(m => m.id === msgId)
+    if (msgIdx === -1) return
+    const baseMessages = messages.slice(0, msgIdx)
+    setMessages(baseMessages)
+
+    const lastUser = [...baseMessages].reverse().find(m => m.role === 'user') as import('../types').UserMessage | undefined
+    if (!lastUser) return
+    await doSend(baseMessages, lastUser.content)
+  }
+
+  const handleRetry = async () => {
+    if (loading) return
+    setError('')
+    if (messages.length === 0) return
+    const lastMsg = messages[messages.length - 1]
+    if (lastMsg.role !== 'user') return
+    const baseMessages = messages.slice(0, -1)
+    await doSend(baseMessages, lastMsg.content)
+  }
+
+  const handleCopy = async (content: string) => {
+    try {
+      await navigator.clipboard.writeText(content)
+    } catch { /* ignore */ }
+  }
+
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === 'Escape' && editingId) {
+      setEditingId(null)
+      setInput('')
+      return
+    }
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       handleSend()
@@ -219,6 +307,9 @@ export default function ChatPage({ sidebarOpen, setSidebarOpen }: ChatPageProps)
     setError('')
     setSources([])
     setMetrics(null)
+    setEditingId(null)
+    setInput('')
+    setContextUsed(0)
   }
 
   const providerLabel = PROVIDERS.find(p => p.id === providerName)?.label || providerName
@@ -327,8 +418,8 @@ export default function ChatPage({ sidebarOpen, setSidebarOpen }: ChatPageProps)
           </div>
         )}
 
-        {messages.map((msg, i) => (
-          <div key={i} className={`message ${msg.role}`}>
+        {messages.map((msg) => (
+          <div key={msg.id} className={`message ${msg.role}`}>
             <div className="msg-bubble">
               {msg.role === 'assistant' && msg.thinking && showThinking && (
                 <details className="thinking-block">
@@ -363,6 +454,36 @@ export default function ChatPage({ sidebarOpen, setSidebarOpen }: ChatPageProps)
                     )
                   )}
                 </div>
+              )}
+              {msg.ts && (
+                <div className="msg-timestamp">{formatTime(msg.ts)}</div>
+              )}
+            </div>
+            <div className="msg-actions">
+              <button
+                className="msg-action-btn"
+                onClick={() => handleCopy(msg.content)}
+                title="Копировать"
+              >
+                📋
+              </button>
+              {msg.role === 'user' && (
+                <button
+                  className="msg-action-btn"
+                  onClick={() => handleEdit(msg.id)}
+                  title="Редактировать"
+                >
+                  ✏
+                </button>
+              )}
+              {msg.role === 'assistant' && (
+                <button
+                  className="msg-action-btn"
+                  onClick={() => handleRegenerate(msg.id)}
+                  title="Перегенерировать"
+                >
+                  🔄
+                </button>
               )}
             </div>
           </div>
@@ -412,11 +533,29 @@ export default function ChatPage({ sidebarOpen, setSidebarOpen }: ChatPageProps)
             <div className="msg-bubble" style={{ background: 'var(--red)', color: '#fff' }}>
               ❌ {error}
             </div>
+            <div className="msg-actions" style={{ opacity: 1 }}>
+              <button className="msg-action-btn" onClick={handleRetry} title="Повторить">
+                🔄 Повторить
+              </button>
+            </div>
           </div>
         )}
 
         <div ref={msgEndRef} />
       </div>
+
+      {contextUsed > 0 && (
+        <div className="context-bar">
+          <div
+            className="context-bar-fill"
+            style={{ width: `${Math.min(100, (contextUsed / settings.contextLength) * 100)}%` }}
+          />
+          <span className="context-bar-text">
+            Контекст: {contextUsed.toLocaleString()} / {settings.contextLength.toLocaleString()} токенов
+            {' '}({((contextUsed / settings.contextLength) * 100).toFixed(1)}%)
+          </span>
+        </div>
+      )}
 
       <div className="input-area">
         <div className="input-row">
@@ -427,16 +566,29 @@ export default function ChatPage({ sidebarOpen, setSidebarOpen }: ChatPageProps)
           >
             🧠
           </button>
-          <textarea
-            ref={inputRef}
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder="Введите сообщение..."
-            rows={1}
-            disabled={loading}
-            style={loading ? { opacity: 0.5 } : {}}
-          />
+          <div className="input-wrap">
+            {editingId && (
+              <div className="edit-indicator">
+                ✏ Редактирование
+                <button
+                  className="edit-cancel-btn"
+                  onClick={() => { setEditingId(null); setInput('') }}
+                >
+                  Отмена
+                </button>
+              </div>
+            )}
+            <textarea
+              ref={inputRef}
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={handleKeyDown}
+              placeholder={editingId ? 'Редактирование...' : 'Введите сообщение...'}
+              rows={1}
+              disabled={loading}
+              style={loading ? { opacity: 0.5 } : {}}
+            />
+          </div>
           {streaming ? (
             <button className="stop-btn" onClick={handleStop}>
               ⏹

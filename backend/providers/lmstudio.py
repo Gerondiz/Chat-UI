@@ -14,7 +14,7 @@ class LMStudioProvider(BaseProvider):
         headers = {"Content-Type": "application/json"}
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
-        self._client = httpx.AsyncClient(timeout=120, headers=headers)
+        self._client = httpx.AsyncClient(timeout=300, headers=headers)
 
     async def _post(self, path: str, data: dict):
         url = f"{self.base_url}{path}"
@@ -81,7 +81,7 @@ class LMStudioProvider(BaseProvider):
                                 d = json.loads(payload)
                                 content = d.get("content", "")
                                 if content:
-                                    yield f"<think>{content}</think>"
+                                    yield f"<think{content} response"
                             elif current_event == "message.delta":
                                 d = json.loads(payload)
                                 content = d.get("content", "")

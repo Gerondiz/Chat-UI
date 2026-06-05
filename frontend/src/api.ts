@@ -17,7 +17,7 @@ import type {
   AbortFn,
 } from './types'
 
-const API = 'http://localhost:8000/api'
+const API = '/api'
 
 export async function getProviders(): Promise<{ providers: string[] }> {
   const r = await fetch(`${API}/providers`)

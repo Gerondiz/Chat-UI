@@ -84,6 +84,8 @@ export interface SSEData {
 export interface UserMessage {
   role: 'user'
   content: string
+  id: string
+  ts: number
 }
 
 export interface AssistantMessage {
@@ -91,15 +93,23 @@ export interface AssistantMessage {
   content: string
   thinking?: string
   metrics?: Metrics | null
+  id: string
+  ts: number
 }
 
 export type Message = UserMessage | AssistantMessage
+
+export interface EditInfo {
+  msgId: string
+  text: string
+}
 
 export interface ChatSettings {
   systemPrompt: string
   temperature: number
   maxTokens: number
   topP: number
+  contextLength: number
 }
 
 export type TokenCallback = (token: string) => void

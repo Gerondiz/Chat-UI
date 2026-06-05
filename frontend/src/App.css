@@ -744,6 +744,109 @@ html, body, #root {
   gap: 12px;
 }
 
+/* Timestamp */
+.msg-timestamp {
+  font-size: 10px;
+  color: var(--text2);
+  opacity: 0.6;
+  margin-top: 4px;
+  text-align: right;
+}
+
+/* Message actions */
+.msg-actions {
+  display: flex;
+  gap: 2px;
+  padding: 2px 4px 0;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.message:hover .msg-actions {
+  opacity: 1;
+}
+
+.message.user .msg-actions {
+  justify-content: flex-end;
+}
+
+.msg-action-btn {
+  background: none;
+  border: none;
+  color: var(--text2);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 2px 4px;
+  border-radius: 4px;
+  transition: all 0.15s;
+  line-height: 1;
+}
+
+.msg-action-btn:hover {
+  background: var(--surface);
+  color: var(--text);
+}
+
+/* Edit indicator */
+.edit-indicator {
+  font-size: 11px;
+  color: var(--accent);
+  padding: 4px 0 2px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.edit-cancel-btn {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text2);
+  padding: 2px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 11px;
+  transition: all 0.15s;
+}
+
+.edit-cancel-btn:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.input-wrap {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Context bar */
+.context-bar {
+  padding: 3px 20px;
+  background: var(--bg2);
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--text2);
+  display: flex;
+  align-items: center;
+  position: relative;
+  flex-shrink: 0;
+}
+
+.context-bar-fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  background: var(--accent);
+  opacity: 0.08;
+  transition: width 0.3s ease;
+}
+
+.context-bar-text {
+  position: relative;
+  z-index: 1;
+}
+
 /* Stop button and think toggle */
 .stop-btn {
   background: var(--red);
