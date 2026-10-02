@@ -11,7 +11,15 @@ from models import ChatRequest
 from mcp_host import mcp_host
 from state import AppState
 from agent import run_agent_loop
-from utils import build_messages, extract_thinking
+from utils import build_messages, extract_thinking, resolve_context_length
+
+
+async def _apply_context_limit(req: ChatRequest, provider) -> None:
+    """Cap the requested context window at what the model is loaded with."""
+    req.context_length = resolve_context_length(
+        req.context_length,
+        await provider.model_context_length(),
+    )
 from streaming import compute_stream_metrics, sse_token, sse_done, sse_step
 
 
@@ -41,6 +49,7 @@ async def chat(req: ChatRequest, request: Request):
                         + "\n---\nОтветь на вопрос на основе контекста выше."
                     )
 
+        await _apply_context_limit(req, state.provider)
         messages = build_messages(req)
 
         if req.mode == "agent":
@@ -112,6 +121,7 @@ async def chat_stream(req: ChatRequest, request: Request):
             if query:
                 docs = await rag.search_collection(req.collection, query)
 
+        await _apply_context_limit(req, state.provider)
         messages = build_messages(req)
 
         if req.mode == "agent":

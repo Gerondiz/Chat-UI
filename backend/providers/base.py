@@ -135,3 +135,7 @@ class BaseProvider(ABC):
     @abstractmethod
     async def check(self) -> bool:
         ...
+
+    async def model_context_length(self) -> int:
+        """Context window the loaded model can actually accept, 0 if unknown."""
+        return 0

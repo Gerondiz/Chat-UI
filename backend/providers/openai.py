@@ -1,7 +1,10 @@
 import json
+import time
 import httpx
 import config
 from .base import BaseProvider, ChatResult, Delta, ToolCall, _maybe_await
+
+_CTX_CACHE_TTL = 30.0
 
 
 def _timeout() -> float:
@@ -17,6 +20,49 @@ class OpenAIProvider(BaseProvider):
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
         self._client = httpx.AsyncClient(timeout=_timeout(), headers=headers)
+        self._ctx_cache: tuple[float, int] | None = None
+
+    async def model_context_length(self) -> int:
+        """Return the context window the model is actually loaded with.
+
+        LM Studio exposes this only through its native API, and the loaded
+        value is usually far below what the model supports (a 131072-token
+        model may well be running at 4096). A prompt above the loaded window
+        is rejected outright, so the caller needs the real number and not the
+        advertised maximum. Returns 0 when it cannot be determined.
+        """
+        now = time.monotonic()
+        if self._ctx_cache and now - self._ctx_cache[0] < _CTX_CACHE_TTL:
+            return self._ctx_cache[1]
+
+        base = self.base_url.rstrip("/")
+        if base.endswith("/v1"):
+            base = base[: -len("/v1")]
+        length = 0
+        try:
+            resp = await self._client.get(f"{base}/api/v0/models")
+            resp.raise_for_status()
+            models = resp.json().get("data", [])
+            await resp.aclose()
+            loaded = next(
+                (m for m in models
+                 if m.get("id") == self.chat_model and m.get("state") == "loaded"),
+                None,
+            )
+            match = loaded or next(
+                (m for m in models if m.get("id") == self.chat_model), None
+            )
+            if match:
+                length = int(
+                    match.get("loaded_context_length")
+                    or match.get("max_context_length")
+                    or 0
+                )
+        except Exception:
+            length = 0
+
+        self._ctx_cache = (now, length)
+        return length
 
     async def chat(
         self, messages, system_prompt="",

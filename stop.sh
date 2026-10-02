@@ -22,7 +22,18 @@ pkill -f "$ROOT/frontend/node_modules/@esbuild" 2>/dev/null
 
 sleep 1
 
-# 5. Проверка портов
+# 5. Добиваем по портам. Совпадения по имени процесса недостаточно: uvicorn
+#    может остаться жив, и тогда следующий start.sh молча поднимет старую
+#    версию кода на занятом порте.
+for port in 8000 5173; do
+  if ss -ltn 2>/dev/null | grep -q ":$port\b"; then
+    fuser -k "${port}/tcp" >/dev/null 2>&1
+  fi
+done
+
+sleep 1
+
+# 6. Проверка портов
 left=""
 for port in 8000 5173; do
   if ss -ltn 2>/dev/null | grep -q ":$port\b"; then
