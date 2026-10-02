@@ -9,8 +9,10 @@ export default defineConfig({
       '/api': {
         target: 'http://127.0.0.1:8000',
         changeOrigin: true,
-        timeout: 900000,
-        proxyTimeout: 900000,
+        // Must stay above the backend provider timeout, otherwise the proxy
+        // cuts a long-running generation before the backend gives up.
+        timeout: 1800000,
+        proxyTimeout: 1800000,
       },
     },
   },
