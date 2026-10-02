@@ -9,6 +9,7 @@
   --accent: #4a9eff;
   --accent2: #2d7dd2;
   --green: #4caf50;
+  --warn: #e8a33d;
   --red: #ef5350;
   --radius: 8px;
   --sidebar-w: 280px;
@@ -943,6 +944,12 @@ html, body, #root {
   color: var(--text2);
   display: flex;
   gap: 12px;
+  align-items: center;
+}
+
+.metrics-warn {
+  color: var(--warn);
+  font-weight: 600;
 }
 
 /* Timestamp */

@@ -15,6 +15,7 @@ export interface ChatOptions {
   collection?: string
   temperature?: number
   maxTokens?: number
+  contextLength?: number
   topP?: number
   reasoning?: boolean
 }
@@ -81,6 +82,7 @@ export interface Metrics {
   lm_tokens_per_sec?: number
   ttft?: number
   tool_iterations?: number
+  finish_reason?: string
 }
 
 export interface SSEData {

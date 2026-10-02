@@ -86,6 +86,7 @@ class OpenAIProvider(BaseProvider):
         async with self._client.stream("POST", f"{self.base_url}/chat/completions", json=body) as resp:
             reasoning_open = False
             reasoning_tokens_count = 0
+            finish_reason = None
             async for line in resp.aiter_lines():
                 if not line.strip():
                     continue
@@ -94,6 +95,8 @@ class OpenAIProvider(BaseProvider):
                     if payload.strip() == "[DONE]":
                         if reasoning_open:
                             yield "</think>"
+                        if finish_reason:
+                            yield f"__LMSTATS__{json.dumps({'finish_reason': finish_reason})}__LMSTATS__"
                         break
                     try:
                         chunk = json.loads(payload)
@@ -102,16 +105,23 @@ class OpenAIProvider(BaseProvider):
                             if reasoning_open:
                                 yield "</think>"
                                 reasoning_open = False
+                            choices = chunk.get("choices") or []
+                            if choices and choices[0].get("finish_reason"):
+                                finish_reason = choices[0]["finish_reason"]
                             stats = {
                                 "input_tokens": usage.get("prompt_tokens", 0),
                                 "output_tokens": usage.get("completion_tokens", 0),
                                 "reasoning_output_tokens": reasoning_tokens_count,
                             }
+                            if finish_reason:
+                                stats["finish_reason"] = finish_reason
                             yield f"__LMSTATS__{json.dumps(stats)}__LMSTATS__"
                             continue
                         choices = chunk.get("choices", [])
                         if not choices:
                             continue
+                        if choices[0].get("finish_reason"):
+                            finish_reason = choices[0]["finish_reason"]
                         delta = choices[0].get("delta", {})
                         content = delta.get("content", "") or ""
                         reasoning = delta.get("reasoning_content", "") or ""
@@ -160,6 +170,7 @@ class OpenAIProvider(BaseProvider):
 
         parts: list[str] = []
         reasoning_parts: list[str] = []
+        finish_reason = None
         # tool calls arrive as fragments keyed by their position in the array
         raw_calls: dict[int, dict] = {}
 
@@ -179,6 +190,8 @@ class OpenAIProvider(BaseProvider):
                 choices = chunk.get("choices") or []
                 if not choices:
                     continue
+                if choices[0].get("finish_reason"):
+                    finish_reason = choices[0]["finish_reason"]
                 delta = choices[0].get("delta") or {}
 
                 content = delta.get("content") or ""
@@ -220,7 +233,8 @@ class OpenAIProvider(BaseProvider):
         rc = "".join(reasoning_parts)
         if rc:
             content = f"<think>{rc}</think>{content}"
-        return ChatResult(content=content, tool_calls=tool_calls or None)
+        return ChatResult(content=content, tool_calls=tool_calls or None,
+                         finish_reason=finish_reason)
 
     async def embeddings(self, texts):
         body = {"model": self.embedding_model, "input": texts}

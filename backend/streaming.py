@@ -43,6 +43,10 @@ def compute_stream_metrics(
         "output_tokens": output_tokens,
         "tokens_per_sec": tps,
     }
+    finish_reason = (lm_stats or {}).get("finish_reason")
+    if finish_reason:
+        # "length" means the model was cut off mid-answer by max_tokens.
+        metrics["finish_reason"] = finish_reason
     if lm_stats:
         metrics["input_tokens"] = lm_stats.get("input_tokens", 0)
         lm_output = lm_stats.get("output_tokens", 0)

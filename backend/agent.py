@@ -83,7 +83,7 @@ async def run_agent_loop(
     max_iterations: int = 3,
     on_step: Callable[[dict], Awaitable[None]] | None = None,
     on_delta: Callable[[dict], Awaitable[None]] | None = None,
-) -> tuple[str | None, list[dict], list[dict]]:
+) -> tuple[str | None, list[dict], list[dict], str | None]:
     async def emit(event: dict) -> None:
         if on_step is None:
             return
@@ -139,7 +139,7 @@ async def run_agent_loop(
                     tools=None,
                     on_delta=emit_delta,
                 )
-                return result.content, all_sources, []
+                return result.content, all_sources, [], result.finish_reason
             except Exception as fallback_exc:
                 logger.error("fallback chat also failed (%s)", fallback_exc)
                 logger.info("fallback exception type: %s, args: %s, repr: %r",
@@ -150,7 +150,7 @@ async def run_agent_loop(
                         state, messages, all_sources,
                         temperature, max_tokens, top_p, reasoning, on_delta)
                     if summary is not None:
-                        return summary, all_sources, []
+                        return summary, all_sources, [], None
                 raise
 
         assistant_msg = provider.format_assistant_message(
@@ -161,7 +161,7 @@ async def run_agent_loop(
 
         if not result.tool_calls:
             await emit({"kind": "turn_end", "discard_content": False})
-            return result.content, all_sources, []
+            return result.content, all_sources, [], result.finish_reason
 
         # The model asked for tools: whatever it streamed as prose belongs to
         # the intermediate turn, not to the final answer.
@@ -190,4 +190,4 @@ async def run_agent_loop(
         tool_messages = provider.format_tool_messages(result.tool_calls, text_results)
         current_messages.extend(tool_messages)
 
-    return None, all_sources, current_messages
+    return None, all_sources, current_messages, None

@@ -22,6 +22,7 @@ class ToolCall:
 class ChatResult:
     content: str
     tool_calls: list[ToolCall] | None = None
+    finish_reason: str | None = None  # "length" means the output was cut off
 
 
 @dataclass

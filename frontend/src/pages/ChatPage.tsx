@@ -45,6 +45,11 @@ function MetricsBar({ metrics }: { metrics: Metrics | null }) {
           <> · {metrics.output_tokens} токенов за {metrics.output_time_sec}с ({metrics.tokens_per_sec} ток/с)</>
         )
       )}
+      {metrics.finish_reason === 'length' ? (
+        <span className="metrics-warn" title="Модель достигла лимита токенов ответа и ответ был прерван">
+          ⚠ ответ обрезан — лимит токенов исчерпан
+        </span>
+      ) : null}
     </div>
   )
 }

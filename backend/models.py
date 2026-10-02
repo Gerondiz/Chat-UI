@@ -14,6 +14,7 @@ class ChatRequest(BaseModel):
     temperature: float = 0.7
     max_tokens: int = 4096
     top_p: float = 0.9
+    context_length: int = 0  # 0 = use the model default from config
     stream: bool = False
     reasoning: bool = True
 

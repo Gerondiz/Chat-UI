@@ -53,7 +53,7 @@ async def chat(req: ChatRequest, request: Request):
                 content, thinking = extract_thinking(result.content)
                 return {"role": "assistant", "content": content, "thinking": thinking, "sources": []}
 
-            content, sources, msgs = await run_agent_loop(
+            content, sources, msgs, _finish = await run_agent_loop(
                 state,
                 messages,
                 temperature=req.temperature,
@@ -214,7 +214,7 @@ async def chat_stream(req: ChatRequest, request: Request):
                         continue
                     getter.cancel()
                     break
-                agent_content, sources, agent_msgs = task.result()
+                agent_content, sources, agent_msgs, finish_reason = task.result()
 
                 if agent_content is not None:
                     if tag_open:
@@ -242,6 +242,7 @@ async def chat_stream(req: ChatRequest, request: Request):
                             "input_tokens": (lm_stats or {}).get("input_tokens", 0),
                             "reasoning_tokens": reasoning_tokens,
                             "tool_iterations": iteration_count,
+                            **({"finish_reason": finish_reason} if finish_reason else {}),
                         },
                     }
                     yield f"data: {json.dumps(done_data)}\n\n"
