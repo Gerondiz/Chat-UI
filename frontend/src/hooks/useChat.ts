@@ -31,6 +31,7 @@ export function useChat() {
   const [chats, setChats] = useState<ChatSummary[]>([])
   const [activeChatId, setActiveChatId] = useState<number | null>(null)
 
+  const sendChatIdRef = useRef<number | null>(null)
   const abortRef = useRef<(() => void) | null>(null)
   const messagesRef = useRef(messages)
   messagesRef.current = messages
@@ -64,7 +65,10 @@ export function useChat() {
   }, [])
 
   const selectChat = useCallback(async (chatId: number) => {
-    if (abortRef.current) abortRef.current()
+    // NOTE: an in-flight request is intentionally NOT aborted here. Switching
+    // chats used to cancel it, which discarded the answer permanently: onDone
+    // never fired, so the reply was never saved. It now keeps running in the
+    // background and is persisted to its own chat when it completes.
     if (activeChatIdRef.current && messagesRef.current.length > 0) {
       await saveMessages()
     }
@@ -85,7 +89,7 @@ export function useChat() {
   }, [saveMessages])
 
   const createNewChat = useCallback(async () => {
-    if (abortRef.current) abortRef.current()
+    // See selectChat: the running request keeps streaming into its own chat.
     if (activeChatIdRef.current && messagesRef.current.length > 0) {
       await saveMessages()
     }
@@ -116,6 +120,7 @@ export function useChat() {
       abortRef.current()
       abortRef.current = null
     }
+    sendChatIdRef.current = null
     setStreaming(false)
     setLoading(false)
   }, [])
@@ -134,6 +139,7 @@ export function useChat() {
     setMessages(updated)
 
     if (abortRef.current) abortRef.current()
+    sendChatIdRef.current = chatId
     setLoading(true)
     setStreaming(true)
     setStreamText('')
@@ -152,9 +158,11 @@ export function useChat() {
       updated,
       { settings, mode, collection: selectedCollection, reasoning: showThinking },
       (token: string) => {
+        if (activeChatIdRef.current !== chatId) return
         setStreamText((prev) => prev + token)
       },
       (thinking: string, isEnd: boolean) => {
+        if (activeChatIdRef.current !== chatId) return
         if (isEnd) {
           setStreamThinking((prev) => prev)
         } else if (thinking) {
@@ -162,17 +170,31 @@ export function useChat() {
         }
       },
       (full: string, thinking: string, srcs: Source[], met: Metrics | null) => {
+        const newMsg: Message = {
+          role: 'assistant', content: full,
+          thinking: thinking || '', metrics: met || null,
+          id: generateId(), ts: Date.now(),
+        }
+
+        // The user may have switched to another chat while this was running.
+        // In that case only persist the result; touching the UI would paint
+        // the answer into the wrong conversation.
+        if (activeChatIdRef.current !== chatId) {
+          const result = [...updated, newMsg]
+          api.saveChatMessages(chatId, result).catch(() => {})
+          const title = updated[0]?.content?.slice(0, 60) || 'Новый чат'
+          api.renameChat(chatId, title).catch(() => {})
+          api.getChats().then(setChats).catch(() => {})
+          if (sendChatIdRef.current === chatId) sendChatIdRef.current = null
+          return
+        }
+
         setStreaming(false)
         setLoading(false)
         setStreamText('')
         setStreamThinking('')
         setAgentStep(null)
         setMessages((prev) => {
-          const newMsg: Message = {
-            role: 'assistant', content: full,
-            thinking: thinking || '', metrics: met || null,
-            id: generateId(), ts: Date.now(),
-          }
           const result = [...prev, newMsg]
           // Save after every response
           api.saveChatMessages(chatId, result).catch(() => {})
@@ -185,15 +207,26 @@ export function useChat() {
         }
         // Refresh chat list
         api.getChats().then(setChats).catch(() => {})
+        if (sendChatIdRef.current === chatId) sendChatIdRef.current = null
       },
       (err: string) => {
+        // Same split: surface the error only if its chat is still on screen.
+        if (sendChatIdRef.current === chatId) sendChatIdRef.current = null
+        if (activeChatIdRef.current !== chatId) return
         setStreaming(false)
         setLoading(false)
         setAgentStep(null)
         setError(err)
       },
       (step: AgentStep) => {
+        if (activeChatIdRef.current !== chatId) return
         setAgentStep(step)
+      },
+      () => {
+        // Intermediate agent turn was discarded: clear its text.
+        if (activeChatIdRef.current !== chatId) return
+        setStreamText('')
+        setStreamThinking('')
       },
     )
   }, [loading, settings, mode, selectedCollection, showThinking, ensureChat])

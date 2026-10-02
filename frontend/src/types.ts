@@ -80,6 +80,7 @@ export interface Metrics {
   reasoning_tokens?: number
   lm_tokens_per_sec?: number
   ttft?: number
+  tool_iterations?: number
 }
 
 export interface SSEData {
@@ -144,4 +145,5 @@ export type ThinkingCallback = (thinking: string, isEnd: boolean) => void
 export type DoneCallback = (full: string, thinking: string, sources: Source[], metrics: Metrics | null) => void
 export type ErrorCallback = (err: string) => void
 export type StepCallback = (step: AgentStep) => void
+export type ResetCallback = () => void
 export type AbortFn = () => void

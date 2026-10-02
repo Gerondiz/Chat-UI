@@ -17,6 +17,7 @@ import type {
   DoneCallback,
   ErrorCallback,
   StepCallback,
+  ResetCallback,
   AbortFn,
 } from './types'
 
@@ -101,6 +102,7 @@ export function chatStream(
   onDone?: DoneCallback,
   onError?: ErrorCallback,
   onStep?: StepCallback,
+  onReset?: ResetCallback,
 ): AbortFn {
   const controller = new AbortController()
 
@@ -152,6 +154,13 @@ export function chatStream(
           }
           const token = data.token || ''
           if (!token) continue
+          // The agent discards an intermediate turn's text once it turns out
+          // the model asked for tools instead of answering.
+          if (token === '__RESET__') {
+            inThink = false
+            onReset?.()
+            continue
+          }
 
           // Split token into segments at <think and </think boundaries
           let remaining = token

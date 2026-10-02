@@ -1,6 +1,14 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any
+from inspect import isawaitable
+from typing import Any, Callable
+
+
+async def _maybe_await(value: Any) -> Any:
+    """Await the result of a callback if it happens to be a coroutine."""
+    if isawaitable(value):
+        return await value
+    return value
 
 
 @dataclass
@@ -14,6 +22,18 @@ class ToolCall:
 class ChatResult:
     content: str
     tool_calls: list[ToolCall] | None = None
+
+
+@dataclass
+class Delta:
+    """Live text fragment produced by a single model turn.
+
+    kind is either "reasoning" or "content". When tools are enabled the
+    final content may be discarded if the turn turns out to be a tool call,
+    so the consumer must be able to reset its buffers (see AgentTurn).
+    """
+    kind: str
+    text: str
 
 
 class BaseProvider(ABC):
@@ -35,6 +55,36 @@ class BaseProvider(ABC):
         return await self.chat(
             messages, system_prompt, temperature, max_tokens, top_p, reasoning, tools=tools,
         )
+
+    async def chat_with_tools_stream(
+        self, messages: list[dict], system_prompt: str = "",
+        temperature: float = 0.7, max_tokens: int = 4096, top_p: float = 0.9,
+        reasoning: bool = True,
+        tools: list[dict] | None = None,
+        on_delta: Callable[[Delta], Any] | None = None,
+    ) -> ChatResult:
+        """Tool-capable turn that reports text as it is generated.
+
+        The default implementation is not streaming: it performs a regular
+        tool-capable request and replays the finished text through on_delta.
+        Subclasses that can stream should override this.
+        """
+        result = await self.chat_with_tools(
+            messages, system_prompt, temperature, max_tokens, top_p, reasoning, tools=tools,
+        )
+        if on_delta is None:
+            return result
+
+        from utils import extract_thinking
+
+        content, thinking = extract_thinking(result.content)
+        if thinking:
+            await _maybe_await(on_delta(
+                Delta(kind="reasoning", text=thinking.replace("<think>", "").replace("</think>", "").strip())
+            ))
+        if content:
+            await _maybe_await(on_delta(Delta(kind="content", text=content)))
+        return result
 
     def format_assistant_message(
         self, content: str | None, tool_calls: list[ToolCall] | None

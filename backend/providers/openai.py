@@ -1,7 +1,7 @@
 import json
 import httpx
 import config
-from .base import BaseProvider, ChatResult, ToolCall
+from .base import BaseProvider, ChatResult, Delta, ToolCall, _maybe_await
 
 
 def _timeout() -> float:
@@ -130,6 +130,97 @@ class OpenAIProvider(BaseProvider):
                             yield content
                     except json.JSONDecodeError:
                         continue
+
+    async def chat_with_tools_stream(
+        self, messages, system_prompt="",
+        temperature=0.7, max_tokens=4096, top_p=0.9,
+        reasoning=True,
+        tools=None,
+        on_delta=None,
+    ):
+        """Tool-capable turn that streams text live.
+
+        Content is reported as it arrives. A turn that ends up calling tools
+        cannot be known in advance, so callers must tolerate the content
+        being discarded (the agent loop resets its buffer via on_turn_end).
+        """
+        msgs = list(messages)
+        if system_prompt:
+            msgs.insert(0, {"role": "system", "content": system_prompt})
+        body = {
+            "model": self.chat_model,
+            "messages": msgs,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "top_p": top_p,
+            "stream": True,
+        }
+        if tools:
+            body["tools"] = tools
+
+        parts: list[str] = []
+        reasoning_parts: list[str] = []
+        # tool calls arrive as fragments keyed by their position in the array
+        raw_calls: dict[int, dict] = {}
+
+        async with self._client.stream("POST", f"{self.base_url}/chat/completions", json=body) as resp:
+            async for line in resp.aiter_lines():
+                if not line.strip() or not line.startswith("data: "):
+                    continue
+                payload = line[6:]
+                if payload.strip() == "[DONE]":
+                    break
+                try:
+                    chunk = json.loads(payload)
+                except json.JSONDecodeError:
+                    continue
+                if chunk.get("usage"):
+                    continue
+                choices = chunk.get("choices") or []
+                if not choices:
+                    continue
+                delta = choices[0].get("delta") or {}
+
+                content = delta.get("content") or ""
+                rc = delta.get("reasoning_content") or delta.get("reasoning") or ""
+                if rc:
+                    reasoning_parts.append(rc)
+                    if on_delta is not None:
+                        await _maybe_await(on_delta(Delta(kind="reasoning", text=rc)))
+                if content:
+                    parts.append(content)
+                    if on_delta is not None:
+                        await _maybe_await(on_delta(Delta(kind="content", text=content)))
+
+                for tcd in delta.get("tool_calls") or []:
+                    slot = raw_calls.setdefault(
+                        tcd.get("index", 0),
+                        {"id": "", "name": "", "arguments": ""},
+                    )
+                    if tcd.get("id"):
+                        slot["id"] = tcd["id"]
+                    func = tcd.get("function") or {}
+                    if func.get("name"):
+                        slot["name"] = func["name"]
+                    if func.get("arguments"):
+                        slot["arguments"] += func["arguments"]
+
+        tool_calls = None
+        if raw_calls:
+            tool_calls = []
+            for idx in sorted(raw_calls):
+                slot = raw_calls[idx]
+                try:
+                    args = json.loads(slot["arguments"]) if slot["arguments"] else {}
+                except json.JSONDecodeError:
+                    args = {}
+                tool_calls.append(ToolCall(id=slot["id"], name=slot["name"], arguments=args))
+
+        content = "".join(parts)
+        rc = "".join(reasoning_parts)
+        if rc:
+            content = f"<think>{rc}</think>{content}"
+        return ChatResult(content=content, tool_calls=tool_calls or None)
 
     async def embeddings(self, texts):
         body = {"model": self.embedding_model, "input": texts}
