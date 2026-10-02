@@ -1,6 +1,7 @@
 node_modules/
 dist/
 .env
+provider_config.json
 __pycache__/
 *.pyc
 *.pyo

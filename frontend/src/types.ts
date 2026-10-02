@@ -37,6 +37,16 @@ export interface ProviderStatus {
   error?: string
 }
 
+export interface ProviderTestResult {
+  name: string
+  online: boolean
+  chat_model: string
+  embedding_model: string
+  chat_models: string[]
+  embedding_models: string[]
+  error?: string
+}
+
 export interface Collection {
   name: string
   count: number
@@ -79,6 +89,15 @@ export interface SSEData {
   thinking?: string
   sources?: Source[]
   metrics?: Metrics
+  step?: AgentStep
+}
+
+export interface AgentStep {
+  kind: 'iteration' | 'tool'
+  index?: number
+  max?: number
+  name?: string
+  query?: string
 }
 
 export interface UserMessage {
@@ -124,4 +143,5 @@ export type TokenCallback = (token: string) => void
 export type ThinkingCallback = (thinking: string, isEnd: boolean) => void
 export type DoneCallback = (full: string, thinking: string, sources: Source[], metrics: Metrics | null) => void
 export type ErrorCallback = (err: string) => void
+export type StepCallback = (step: AgentStep) => void
 export type AbortFn = () => void

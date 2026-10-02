@@ -1,5 +1,6 @@
 import json
 import httpx
+import config
 from .base import BaseProvider, ChatResult, ToolCall
 
 
@@ -11,7 +12,7 @@ class LMStudioProvider(BaseProvider):
         headers = {"Content-Type": "application/json"}
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
-        self._client = httpx.AsyncClient(timeout=300, headers=headers)
+        self._client = httpx.AsyncClient(timeout=config.PROVIDER_TIMEOUT, headers=headers)
 
     async def chat(
         self, messages, system_prompt="",

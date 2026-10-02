@@ -1,4 +1,5 @@
 import logging
+from collections.abc import Awaitable, Callable
 
 from mcp_host import mcp_host
 from state import AppState
@@ -18,8 +19,50 @@ AGENT_SYSTEM_PROMPT = (
     "«наслаждайтесь видами» — просто вставь markdown.\n\n"
     "Правила работы с веб-поиском:\n"
     "- Используй search_web для поиска актуальной информации.\n"
-    "- В результатах поиска есть содержимое страниц (content) — используй его для ответа."
+    "- В результатах поиска есть содержимое страниц (content) — используй его для ответа.\n"
+    "- ОДИН поиск — достаточно. Не вызывай инструменты повторно с тем же или похожим "
+    "запросом: получив результаты, сразу отвечай пользователю.\n"
+    "- Не более 2 инструментов подряд. Задача выполнена, когда у тебя есть ответ."
 )
+
+
+async def _answer_from_sources(
+    state: AppState,
+    messages: list[dict],
+    all_sources: list[dict],
+    temperature: float,
+    max_tokens: int,
+    top_p: float,
+    reasoning: bool,
+) -> str | None:
+    """Last-resort answer built from collected tool results, no tools involved."""
+    excerpts = "\n\n".join(
+        f"[{s.get('filename', '')}] {s.get('content', '')}" for s in all_sources[-6:]
+    )
+    prompt = [
+        *messages,
+        {
+            "role": "user",
+            "content": (
+                "Инструменты больше недоступны из-за таймаута. "
+                "Ответь на исходный вопрос, опираясь только на эти результаты:\n\n"
+                f"{excerpts}"
+            ),
+        },
+    ]
+    try:
+        result = await state.provider.chat(
+            prompt,
+            system_prompt=AGENT_SYSTEM_PROMPT,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            top_p=top_p,
+            reasoning=reasoning,
+        )
+        return result.content
+    except Exception as exc:
+        logger.error("answer from sources also failed: %s", exc)
+        return None
 
 
 async def run_agent_loop(
@@ -29,14 +72,28 @@ async def run_agent_loop(
     max_tokens: int,
     top_p: float,
     reasoning: bool,
-    max_iterations: int = 5,
+    max_iterations: int = 3,
+    on_step: Callable[[dict], Awaitable[None]] | None = None,
 ) -> tuple[str | None, list[dict], list[dict]]:
+    async def emit(event: dict) -> None:
+        if on_step is None:
+            return
+        try:
+            await on_step(event)
+        except Exception as exc:
+            logger.warning("on_step callback failed: %s", exc)
+
     all_sources: list[dict] = []
     current_messages = list(messages)
     tool_schemas = mcp_host.get_tool_schemas()
     provider = state.provider
 
     for iteration in range(max_iterations):
+        await emit({
+            "kind": "iteration",
+            "index": iteration + 1,
+            "max": max_iterations,
+        })
         try:
             result = await provider.chat_with_tools(
                 current_messages,
@@ -65,6 +122,13 @@ async def run_agent_loop(
                 logger.error("fallback chat also failed (%s)", fallback_exc)
                 logger.info("fallback exception type: %s, args: %s, repr: %r",
                             type(fallback_exc).__name__, fallback_exc.args, fallback_exc)
+                if iteration > 0 and all_sources:
+                    # We already have tool results; answer from them instead of failing.
+                    summary = await _answer_from_sources(
+                        state, messages, all_sources,
+                        temperature, max_tokens, top_p, reasoning)
+                    if summary is not None:
+                        return summary, all_sources, []
                 raise
 
         assistant_msg = provider.format_assistant_message(
@@ -78,6 +142,11 @@ async def run_agent_loop(
 
         text_results: list[str] = []
         for tc in result.tool_calls:
+            await emit({
+                "kind": "tool",
+                "name": tc.name,
+                "query": tc.arguments.get("query") or tc.arguments.get("collection_name", ""),
+            })
             try:
                 mcp_results = await mcp_host.call_tool(tc.name, tc.arguments)
                 text = "\n".join(r.text for r in mcp_results)

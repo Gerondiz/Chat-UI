@@ -7,6 +7,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 import chat_db
+import config
+import provider_store
 import workspace_db
 from mcp_host import mcp_host
 from state import AppState, auto_select_models, default_config
@@ -35,7 +37,7 @@ async def health():
 async def startup():
     workspace_db.init_db()
     chat_db.init_db()
-    cfg = default_config("ollama")
+    cfg = provider_store.load_config() or default_config(config.DEFAULT_PROVIDER)
     state = AppState()
     provider = state.make_provider(cfg)
     cfg = await auto_select_models(provider, cfg)

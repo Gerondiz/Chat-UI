@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
 import * as api from '../api'
-import type { Message, ChatSettings, Source, Metrics, ChatSummary } from '../types'
+import type { Message, ChatSettings, Source, Metrics, ChatSummary, AgentStep } from '../types'
 
 const generateId = (): string => {
   if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID()
@@ -14,6 +14,7 @@ export function useChat() {
   const [streaming, setStreaming] = useState(false)
   const [streamText, setStreamText] = useState('')
   const [streamThinking, setStreamThinking] = useState('')
+  const [agentStep, setAgentStep] = useState<AgentStep | null>(null)
   const [showThinking, setShowThinking] = useState(true)
   const [error, setError] = useState('')
   const [sources, setSources] = useState<Source[]>([])
@@ -137,6 +138,7 @@ export function useChat() {
     setStreaming(true)
     setStreamText('')
     setStreamThinking('')
+    setAgentStep(null)
     setSources([])
 
     // Auto-title from first user message
@@ -164,6 +166,7 @@ export function useChat() {
         setLoading(false)
         setStreamText('')
         setStreamThinking('')
+        setAgentStep(null)
         setMessages((prev) => {
           const newMsg: Message = {
             role: 'assistant', content: full,
@@ -186,7 +189,11 @@ export function useChat() {
       (err: string) => {
         setStreaming(false)
         setLoading(false)
+        setAgentStep(null)
         setError(err)
+      },
+      (step: AgentStep) => {
+        setAgentStep(step)
       },
     )
   }, [loading, settings, mode, selectedCollection, showThinking, ensureChat])
@@ -250,7 +257,7 @@ export function useChat() {
 
   return {
     messages, input, setInput,
-    loading, streaming, streamText, streamThinking,
+    loading, streaming, streamText, streamThinking, agentStep,
     showThinking, setShowThinking,
     error, sources, metrics, editingId, contextUsed,
     mode, setMode, collections, setCollections,

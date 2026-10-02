@@ -1,6 +1,11 @@
 import json
 import httpx
+import config
 from .base import BaseProvider, ChatResult, ToolCall
+
+
+def _timeout() -> float:
+    return config.PROVIDER_TIMEOUT
 
 
 class OpenAIProvider(BaseProvider):
@@ -11,7 +16,7 @@ class OpenAIProvider(BaseProvider):
         headers = {"Content-Type": "application/json"}
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
-        self._client = httpx.AsyncClient(timeout=300, headers=headers)
+        self._client = httpx.AsyncClient(timeout=_timeout(), headers=headers)
 
     async def chat(
         self, messages, system_prompt="",
@@ -79,7 +84,7 @@ class OpenAIProvider(BaseProvider):
             "stream_options": {"include_usage": True},
         }
         async with self._client.stream("POST", f"{self.base_url}/chat/completions", json=body) as resp:
-            reasoning_buf = []
+            reasoning_open = False
             reasoning_tokens_count = 0
             async for line in resp.aiter_lines():
                 if not line.strip():
@@ -87,16 +92,16 @@ class OpenAIProvider(BaseProvider):
                 if line.startswith("data: "):
                     payload = line[6:]
                     if payload.strip() == "[DONE]":
-                        if reasoning_buf:
-                            yield f"<think>{''.join(reasoning_buf)}</think>"
+                        if reasoning_open:
+                            yield "</think>"
                         break
                     try:
                         chunk = json.loads(payload)
                         usage = chunk.get("usage")
                         if usage:
-                            if reasoning_buf:
-                                yield f"<think>{''.join(reasoning_buf)}</think>"
-                                reasoning_buf = []
+                            if reasoning_open:
+                                yield "</think>"
+                                reasoning_open = False
                             stats = {
                                 "input_tokens": usage.get("prompt_tokens", 0),
                                 "output_tokens": usage.get("completion_tokens", 0),
@@ -113,12 +118,15 @@ class OpenAIProvider(BaseProvider):
                         if not reasoning:
                             reasoning = delta.get("reasoning", "") or ""
                         if reasoning:
-                            reasoning_buf.append(reasoning)
+                            if not reasoning_open:
+                                yield "<think>"
+                                reasoning_open = True
                             reasoning_tokens_count += 1
+                            yield reasoning
                         elif content:
-                            if reasoning_buf:
-                                yield f"<think>{''.join(reasoning_buf)}</think>"
-                                reasoning_buf = []
+                            if reasoning_open:
+                                yield "</think>"
+                                reasoning_open = False
                             yield content
                     except json.JSONDecodeError:
                         continue

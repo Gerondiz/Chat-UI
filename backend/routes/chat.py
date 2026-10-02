@@ -12,7 +12,7 @@ from mcp_host import mcp_host
 from state import AppState
 from agent import run_agent_loop
 from utils import build_messages, extract_thinking
-from streaming import compute_stream_metrics, sse_token, sse_done
+from streaming import compute_stream_metrics, sse_token, sse_done, sse_step
 
 
 logger = logging.getLogger(__name__)
@@ -148,20 +148,37 @@ async def chat_stream(req: ChatRequest, request: Request):
                     yield sse_done(content_only or "", thinking_full, [], metrics)
                 return StreamingResponse(pass_through(), media_type="text/event-stream")
 
-            agent_content, sources, agent_msgs = await run_agent_loop(
-                state,
-                messages,
-                temperature=req.temperature,
-                max_tokens=req.max_tokens,
-                top_p=req.top_p,
-                reasoning=req.reasoning,
-            )
+            async def emit_agent():
+                loop_start = time.monotonic()
+                progress: asyncio.Queue = asyncio.Queue()
 
-            if agent_content is not None:
-                agent_start = time.monotonic()
+                async def on_step(event: dict) -> None:
+                    await progress.put(event)
 
-                async def emit_agent():
-                    nonlocal agent_start
+                async def run_loop():
+                    return await run_agent_loop(
+                        state,
+                        messages,
+                        temperature=req.temperature,
+                        max_tokens=req.max_tokens,
+                        top_p=req.top_p,
+                        reasoning=req.reasoning,
+                        on_step=on_step,
+                    )
+
+                task = asyncio.create_task(run_loop())
+                while True:
+                    getter = asyncio.ensure_future(progress.get())
+                    await asyncio.wait({getter, task}, return_when=asyncio.FIRST_COMPLETED)
+                    if getter.done():
+                        yield sse_step(getter.result())
+                        continue
+                    getter.cancel()
+                    break
+                agent_content, sources, agent_msgs = task.result()
+
+                if agent_content is not None:
+                    replay_start = time.monotonic()
                     content_only, thinking_full = extract_thinking(agent_content)
                     thinking_text = thinking_full.replace("<think>", "").replace("</think>", "").strip() if thinking_full else ""
 
@@ -186,23 +203,23 @@ async def chat_stream(req: ChatRequest, request: Request):
                         if i < len(words) - 1:
                             await asyncio.sleep(0.03)
 
-                    elapsed = round(time.monotonic() - agent_start, 2)
+                    elapsed = round(time.monotonic() - loop_start, 2)
+                    replay_elapsed = round(time.monotonic() - replay_start, 2)
                     token_est = max(len(words), char_count // 4)
                     done_data = {
                         "token": "", "done": True, "full": content_only,
                         "thinking": thinking_full, "sources": sources,
                         "metrics": {
                             "time_sec": elapsed, "tokens": token_est,
-                            "output_time_sec": elapsed, "output_tokens": token_est,
-                            "tokens_per_sec": round(token_est / elapsed, 1) if elapsed > 0 else 0,
+                            "output_time_sec": replay_elapsed, "output_tokens": token_est,
+                            "tokens_per_sec": round(token_est / replay_elapsed, 1) if replay_elapsed > 0 else 0,
                             "reasoning_tokens": 0,
                         },
                     }
                     yield f"data: {json.dumps(done_data)}\n\n"
+                    return
 
-                return StreamingResponse(emit_agent(), media_type="text/event-stream")
-
-            async def stream_agent():
+                # iteration cap hit: stream one final answer without tools
                 t0 = time.monotonic()
                 full = ""
                 token_count = 0
@@ -233,7 +250,7 @@ async def chat_stream(req: ChatRequest, request: Request):
                 )
                 yield sse_done(content_only, thinking_full, sources, metrics)
 
-            return StreamingResponse(stream_agent(), media_type="text/event-stream")
+            return StreamingResponse(emit_agent(), media_type="text/event-stream")
 
         if docs:
             context = (

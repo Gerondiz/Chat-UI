@@ -1,5 +1,6 @@
 import json
 import httpx
+import config
 from .base import BaseProvider, ChatResult, ToolCall
 
 
@@ -8,7 +9,7 @@ class OllamaProvider(BaseProvider):
         self.base_url = base_url.rstrip("/")
         self.chat_model = chat_model
         self.embedding_model = embedding_model
-        self._client = httpx.AsyncClient(timeout=120)
+        self._client = httpx.AsyncClient(timeout=config.PROVIDER_TIMEOUT)
 
     async def _post(self, path: str, data: dict):
         url = f"{self.base_url}{path}"

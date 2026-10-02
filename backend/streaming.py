@@ -63,6 +63,10 @@ def sse_token(token: str) -> str:
     return f"data: {json.dumps({'token': token, 'done': False})}\n\n"
 
 
+def sse_step(event: dict) -> str:
+    return f"data: {json.dumps({'step': event})}\n\n"
+
+
 def sse_done(content: str, thinking: str, sources: list[dict], metrics: dict) -> str:
     obj = {
         "token": "", "done": True, "full": content,

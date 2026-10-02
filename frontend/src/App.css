@@ -825,6 +825,71 @@ html, body, #root {
   margin-top: 2px;
 }
 
+/* --- Connection settings --- */
+
+.conn-loading {
+  color: var(--text2);
+  font-size: 14px;
+  padding: 20px 0;
+}
+
+.conn-error {
+  color: var(--red);
+  font-size: 14px;
+  padding: 12px 0;
+}
+
+.conn-actions {
+  display: flex;
+  gap: 8px;
+  margin: 4px 0 12px;
+}
+
+.conn-actions .btn {
+  flex: 1;
+}
+
+.conn-result {
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  font-size: 13px;
+  margin-bottom: 12px;
+}
+
+.conn-result.ok {
+  background: rgba(46, 204, 113, 0.12);
+  border: 1px solid var(--green);
+  color: var(--green);
+}
+
+.conn-result.fail {
+  background: rgba(231, 76, 60, 0.12);
+  border: 1px solid var(--red);
+  color: var(--red);
+}
+
+.conn-result-title {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.conn-result-err {
+  color: var(--red);
+  word-break: break-word;
+  margin-bottom: 4px;
+}
+
+.conn-result-models {
+  color: var(--text2);
+  word-break: break-word;
+}
+
+.conn-saved {
+  color: var(--green);
+  font-size: 13px;
+  margin-bottom: 8px;
+}
+
 /* --- Collection select on chat --- */
 
 .rag-select {
@@ -1064,4 +1129,22 @@ html, body, #root {
 
 ::-webkit-scrollbar-thumb:hover {
   background: var(--text2);
+}
+
+.agent-step {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text2);
+  font-size: 13px;
+  padding: 4px 0;
+}
+
+.agent-step-icon {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent, #6c8cff);
+  animation: typing 1s infinite;
+  flex-shrink: 0;
 }

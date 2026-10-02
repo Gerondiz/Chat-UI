@@ -1,6 +1,7 @@
 import type {
   ProviderConfig,
   ProviderStatus,
+  ProviderTestResult,
   Collection,
   CollectionDoc,
   Workspace,
@@ -15,6 +16,7 @@ import type {
   ThinkingCallback,
   DoneCallback,
   ErrorCallback,
+  StepCallback,
   AbortFn,
 } from './types'
 
@@ -50,6 +52,15 @@ export async function updateProviderConfig(cfg: Partial<ProviderConfig>): Promis
 
 export async function getProviderStatus(): Promise<ProviderStatus> {
   const r = await fetch(`${API}/provider/status`)
+  return r.json()
+}
+
+export async function testProviderConfig(cfg: ProviderConfig): Promise<ProviderTestResult> {
+  const r = await fetch(`${API}/provider/test`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(cfg),
+  })
   return r.json()
 }
 
@@ -89,6 +100,7 @@ export function chatStream(
   onThinking?: ThinkingCallback,
   onDone?: DoneCallback,
   onError?: ErrorCallback,
+  onStep?: StepCallback,
 ): AbortFn {
   const controller = new AbortController()
 
@@ -132,6 +144,10 @@ export function chatStream(
           const data: SSEData = JSON.parse(line.slice(6))
           if (data.done) {
             onDone?.(data.full || '', data.thinking || '', data.sources || [], data.metrics || null)
+            continue
+          }
+          if (data.step) {
+            onStep?.(data.step)
             continue
           }
           const token = data.token || ''

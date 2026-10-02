@@ -46,4 +46,4 @@ Providers: `ollama` / `openai` / `lmstudio`. Base class at `backend/providers/ba
 - SSE streaming sends `data: {token, done}` lines; final message includes `full`, `thinking`, `sources`, `metrics`
 - Workspace CRUD via SQLite (`workspace_db.py`), not in-memory
 - Default system prompt is Russian: `"Ты — полезный ассистент. Отвечай на русском языке."`
-- `search_web` tool fetches actual page content via httpx + stdlib HTMLParser, not just snippets. Returns up to 8KB of text per page, skips script/style tags, excludes known non-textual domains (YouTube, Instagram, etc.)
+- `search_web` tool fetches actual page content via httpx + stdlib HTMLParser, not just snippets. Returns up to 2KB of text per page with a 6KB total budget, skips script/style tags, excludes known non-textual domains (YouTube, Instagram, etc.)

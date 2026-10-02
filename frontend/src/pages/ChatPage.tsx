@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import SettingsPanel from '../components/SettingsPanel'
+import ConnectionSettings from '../components/ConnectionSettings'
 import Sidebar from '../components/Sidebar'
 import * as api from '../api'
 import { useChat } from '../hooks/useChat'
@@ -88,7 +89,7 @@ interface ChatPageProps {
 export default function ChatPage({ sidebarOpen, setSidebarOpen, page, onPageChange }: ChatPageProps) {
   const {
     messages, input, setInput,
-    loading, streaming, streamText, streamThinking,
+    loading, streaming, streamText, streamThinking, agentStep,
     showThinking, setShowThinking,
     error, sources, metrics, editingId, contextUsed,
     mode, setMode, collections, setCollections,
@@ -108,6 +109,7 @@ export default function ChatPage({ sidebarOpen, setSidebarOpen, page, onPageChan
   const msgContainerRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const [showSettings, setShowSettings] = useState(false)
+  const [showConnection, setShowConnection] = useState(false)
   const [userScrolledUp, setUserScrolledUp] = useState(false)
 
   const scrollToBottom = useCallback(() => {
@@ -187,6 +189,7 @@ export default function ChatPage({ sidebarOpen, setSidebarOpen, page, onPageChan
                   ))}
                 </select>
               )}
+              <button className="settings-btn" onClick={() => setShowConnection(true)} title="Подключение к LLM">🔌</button>
               <button className="settings-btn" onClick={() => setShowSettings(true)}>⚙</button>
               <button className="settings-btn" onClick={handleNewChat}>✨</button>
             </div>
@@ -219,10 +222,18 @@ export default function ChatPage({ sidebarOpen, setSidebarOpen, page, onPageChan
               <div className="message assistant">
                 <div className="msg-bubble">
                   {streamThinking && showThinking && (
-                    <details className="thinking-block">
+                    <details className="thinking-block" open>
                       <summary>🤔 Размышления модели</summary>
                       <div className="thinking-content">{cleanThinking(streamThinking)}</div>
                     </details>
+                  )}
+                  {agentStep && (
+                    <div className="agent-step">
+                      <span className="agent-step-icon" />
+                      {agentStep.kind === 'tool'
+                        ? `🔧 ${agentStep.name}${agentStep.query ? `: ${agentStep.query}` : ''}`
+                        : `🧠 Шаг ${agentStep.index} из ${agentStep.max}`}
+                    </div>
                   )}
                   {streamText ? (
                     <ReactMarkdown remarkPlugins={[remarkGfm]}>{stripHtml(streamText)}</ReactMarkdown>
@@ -297,6 +308,13 @@ export default function ChatPage({ sidebarOpen, setSidebarOpen, page, onPageChan
 
           {showSettings && (
             <SettingsPanel settings={settings} onChange={setSettings} onClose={() => setShowSettings(false)} />
+          )}
+
+          {showConnection && (
+            <ConnectionSettings
+              onClose={() => setShowConnection(false)}
+              onSaved={() => { setShowConnection(false); loadProviderInfo() }}
+            />
           )}
         </div>
       </main>

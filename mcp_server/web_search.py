@@ -12,7 +12,8 @@ from duckduckgo_search import DDGS
 
 logger = logging.getLogger(__name__)
 
-_MAX_CONTENT_LENGTH = 8000
+_MAX_CONTENT_LENGTH = 2000
+_MAX_TOTAL_CONTENT_LENGTH = 6000
 _HTTP_TIMEOUT = 10.0
 
 
@@ -135,6 +136,7 @@ async def search_web(query: str, max_results: int = 5) -> list[dict[str, str]]:
     content_by_url = dict(zip(urls, contents))
 
     results: list[dict[str, str]] = []
+    budget = _MAX_TOTAL_CONTENT_LENGTH
     for r in raw:
         url = r.get("href", "")
         item: dict[str, str] = {
@@ -143,7 +145,9 @@ async def search_web(query: str, max_results: int = 5) -> list[dict[str, str]]:
             "snippet": r.get("body", ""),
         }
         content = content_by_url.get(url) or ""
-        if content:
+        if content and budget > 0:
+            content = content[:min(len(content), _MAX_CONTENT_LENGTH, budget)]
+            budget -= len(content)
             item["content"] = content
         results.append(item)
 
