@@ -7,6 +7,37 @@ const generateId = (): string => {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
 }
 
+const SETTINGS_KEY = 'chat-ui.settings'
+
+// Chat settings are shared by every chat rather than stored per chat, so they
+// survive a page reload and a detour through the Collections page, both of
+// which unmount the chat screen and rebuild this state from scratch.
+const DEFAULT_SETTINGS: ChatSettings = {
+  systemPrompt: '', temperature: 0.7, maxTokens: 4096, topP: 0.9,
+}
+
+const clampNum = (value: unknown, min: number, max: number, fallback: number): number => {
+  const n = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(n)) return fallback
+  return Math.min(max, Math.max(min, n))
+}
+
+function loadSettings(): ChatSettings {
+  try {
+    const raw = localStorage.getItem(SETTINGS_KEY)
+    if (!raw) return DEFAULT_SETTINGS
+    const saved = JSON.parse(raw) ?? {}
+    return {
+      systemPrompt: typeof saved.systemPrompt === 'string' ? saved.systemPrompt : '',
+      temperature: clampNum(saved.temperature, 0, 2, DEFAULT_SETTINGS.temperature),
+      maxTokens: Math.round(clampNum(saved.maxTokens, 64, 32768, DEFAULT_SETTINGS.maxTokens)),
+      topP: clampNum(saved.topP, 0, 1, DEFAULT_SETTINGS.topP),
+    }
+  } catch {
+    return DEFAULT_SETTINGS
+  }
+}
+
 export function useChat() {
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
@@ -21,12 +52,11 @@ export function useChat() {
   const [metrics, setMetrics] = useState<Metrics | null>(null)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [contextUsed, setContextUsed] = useState(0)
+  const [contextWindow, setContextWindow] = useState(0)
   const [mode, setMode] = useState('agent')
   const [collections, setCollections] = useState<{ name: string; count: number }[]>([])
   const [selectedCollection, setSelectedCollection] = useState('')
-  const [settings, setSettings] = useState<ChatSettings>({
-    systemPrompt: '', temperature: 0.7, maxTokens: 4096, topP: 0.9, contextLength: 131072,
-  })
+  const [settings, setSettings] = useState<ChatSettings>(loadSettings)
 
   const [chats, setChats] = useState<ChatSummary[]>([])
   const [activeChatId, setActiveChatId] = useState<number | null>(null)
@@ -39,6 +69,10 @@ export function useChat() {
   activeChatIdRef.current = activeChatId
 
   useEffect(() => { api.getChats().then(setChats).catch(() => {}) }, [])
+
+  useEffect(() => {
+    try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)) } catch { /* private mode */ }
+  }, [settings])
 
   const ensureChat = useCallback(async () => {
     if (activeChatIdRef.current) return activeChatIdRef.current
@@ -83,6 +117,7 @@ export function useChat() {
     setEditingId(null)
     setInput('')
     setContextUsed(0)
+    setContextWindow(0)
 
     const msgs = await api.getChatMessages(chatId)
     setMessages(msgs)
@@ -105,6 +140,7 @@ export function useChat() {
     setEditingId(null)
     setInput('')
     setContextUsed(0)
+    setContextWindow(0)
   }, [saveMessages])
 
   const deleteChat = useCallback(async (chatId: number) => {
@@ -204,6 +240,9 @@ export function useChat() {
         setMetrics(met || null)
         if (met) {
           setContextUsed((met.input_tokens || 0) + (met.tokens || 0))
+          // The window the backend actually enforced, since the server clamps
+          // the request to what the model was loaded with.
+          setContextWindow(met.context_length || 0)
         }
         // Refresh chat list
         api.getChats().then(setChats).catch(() => {})
@@ -292,7 +331,7 @@ export function useChat() {
     messages, input, setInput,
     loading, streaming, streamText, streamThinking, agentStep,
     showThinking, setShowThinking,
-    error, sources, metrics, editingId, contextUsed,
+    error, sources, metrics, editingId, contextUsed, contextWindow,
     mode, setMode, collections, setCollections,
     selectedCollection, setSelectedCollection,
     settings, setSettings,

@@ -16,6 +16,7 @@ def compute_stream_metrics(
     output_tokens: int,
     full: str,
     lm_stats: dict | None,
+    context_length: int = 0,
 ) -> tuple[str, str, dict]:
     now = time.monotonic()
     elapsed = round(now - start, 2)
@@ -47,6 +48,10 @@ def compute_stream_metrics(
     if finish_reason:
         # "length" means the model was cut off mid-answer by max_tokens.
         metrics["finish_reason"] = finish_reason
+    if context_length:
+        # The window actually enforced on this request, so the client can show
+        # the real number instead of a value it made up.
+        metrics["context_length"] = context_length
     if lm_stats:
         metrics["input_tokens"] = lm_stats.get("input_tokens", 0)
         lm_output = lm_stats.get("output_tokens", 0)

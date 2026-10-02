@@ -61,7 +61,11 @@ class OpenAIProvider(BaseProvider):
         except Exception:
             length = 0
 
-        self._ctx_cache = (now, length)
+        # Only remember a real answer. Caching a failed probe would keep
+        # falling back to the generic default for the whole TTL, which is how
+        # a momentary hiccup silently widens the window past what fits.
+        if length > 0:
+            self._ctx_cache = (now, length)
         return length
 
     async def chat(

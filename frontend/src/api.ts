@@ -85,7 +85,6 @@ export async function chat(
       collection: opts.collection || '',
       temperature: opts.temperature ?? settings?.temperature ?? 0.7,
       max_tokens: opts.maxTokens ?? settings?.maxTokens ?? 4096,
-      context_length: opts.contextLength ?? settings?.contextLength ?? 0,
       top_p: opts.topP ?? settings?.topP ?? 0.9,
       reasoning: opts.reasoning ?? true,
       stream: false,
@@ -116,7 +115,6 @@ export function chatStream(
     // values must be read from there too or the panel has no effect.
     temperature: opts.temperature ?? opts.settings?.temperature ?? 0.7,
     max_tokens: opts.maxTokens ?? opts.settings?.maxTokens ?? 4096,
-    context_length: opts.contextLength ?? opts.settings?.contextLength ?? 0,
     top_p: opts.topP ?? opts.settings?.topP ?? 0.9,
     reasoning: opts.reasoning ?? true,
     stream: true,

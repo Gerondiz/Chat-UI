@@ -58,15 +58,6 @@ export default function SettingsPanel({ settings, onChange, onClose }: SettingsP
           />
         </div>
 
-        <div className="settings-group">
-          <label>Контекстное окно модели (токенов)</label>
-          <input
-            type="number" min="1024" max="524288" step="1"
-            value={settings.contextLength}
-            onChange={(e) => set('contextLength', parseInt(e.target.value) || 131072)}
-          />
-        </div>
-
         <button
           className="btn btn-primary"
           onClick={onClose}

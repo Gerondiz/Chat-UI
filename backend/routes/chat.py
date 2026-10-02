@@ -154,6 +154,7 @@ async def chat_stream(req: ChatRequest, request: Request):
 
                     content_only, thinking_full, metrics = compute_stream_metrics(
                         start, output_start, token_count, output_tokens, full, lm_stats,
+                        req.context_length,
                     )
                     yield sse_done(content_only or "", thinking_full, [], metrics)
                 return StreamingResponse(pass_through(), media_type="text/event-stream")
@@ -252,6 +253,7 @@ async def chat_stream(req: ChatRequest, request: Request):
                             "input_tokens": (lm_stats or {}).get("input_tokens", 0),
                             "reasoning_tokens": reasoning_tokens,
                             "tool_iterations": iteration_count,
+                            "context_length": req.context_length,
                             **({"finish_reason": finish_reason} if finish_reason else {}),
                         },
                     }
@@ -286,6 +288,7 @@ async def chat_stream(req: ChatRequest, request: Request):
 
                 content_only, thinking_full, metrics = compute_stream_metrics(
                     t0, output_start, token_count, output_tokens, full, lm_stats,
+                    req.context_length,
                 )
                 yield sse_done(content_only, thinking_full, sources, metrics)
 
@@ -331,7 +334,8 @@ async def chat_stream(req: ChatRequest, request: Request):
 
             content_only, thinking_full, metrics = compute_stream_metrics(
                 start_time, output_start, token_count, output_tokens, full, lm_stats,
-            )
+                    req.context_length,
+                )
 
             sources_data = []
             for d in docs:

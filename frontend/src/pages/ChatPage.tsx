@@ -96,7 +96,7 @@ export default function ChatPage({ sidebarOpen, setSidebarOpen, page, onPageChan
     messages, input, setInput,
     loading, streaming, streamText, streamThinking, agentStep,
     showThinking, setShowThinking,
-    error, sources, metrics, editingId, contextUsed,
+    error, sources, metrics, editingId, contextUsed, contextWindow,
     mode, setMode, collections, setCollections,
     selectedCollection, setSelectedCollection,
     settings, setSettings,
@@ -116,6 +116,9 @@ export default function ChatPage({ sidebarOpen, setSidebarOpen, page, onPageChan
   const [showSettings, setShowSettings] = useState(false)
   const [showConnection, setShowConnection] = useState(false)
   const [userScrolledUp, setUserScrolledUp] = useState(false)
+  const contextPct = contextWindow > 0
+    ? Math.min(100, (contextUsed / contextWindow) * 100)
+    : 0
 
   const scrollToBottom = useCallback(() => {
     if (!userScrolledUp) msgEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -274,13 +277,15 @@ export default function ChatPage({ sidebarOpen, setSidebarOpen, page, onPageChan
             <div ref={msgEndRef} />
           </div>
 
-          {/* Context bar */}
+          {/* Context bar. The window comes from the backend because it is what the
+              model was actually loaded with, not something we choose here. */}
           {contextUsed > 0 && (
             <div className="context-bar">
               <div className="context-bar-fill"
-                style={{ width: `${Math.min(100, (contextUsed / settings.contextLength) * 100)}%` }} />
+                style={{ width: `${contextPct}%` }} />
               <span className="context-bar-text">
-                Контекст: {contextUsed.toLocaleString()} / {settings.contextLength.toLocaleString()} токенов ({((contextUsed / settings.contextLength) * 100).toFixed(1)}%)
+                Контекст: {contextUsed.toLocaleString()}
+                {contextWindow > 0 && <> / {contextWindow.toLocaleString()}</>} токенов{contextWindow > 0 && ` (${contextPct.toFixed(1)}%)`}
               </span>
             </div>
           )}
